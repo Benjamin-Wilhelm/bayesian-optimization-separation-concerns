@@ -30,19 +30,18 @@ import torch
 # ---------------------------------------------------------------------------
 
 def ensure_2d_y(y: torch.Tensor) -> torch.Tensor:
-    """Convert a 1-D tensor of shape ``(n,)`` to ``(n, 1)``.
+    """Convert a 1-D tensor of shape (n,) to (n, 1).
 
-    Leaves tensors already shaped ``(n, 1)`` unchanged.
+    Leaves tensors already shaped (n, 1) unchanged.
 
     Args:
-        y: Tensor of shape ``(n,)`` or ``(n, 1)``.
+        y: Tensor of shape (n,) or (n, 1).
 
     Returns:
-        Tensor of shape ``(n, 1)``.
+        Tensor of shape (n, 1).
 
     Raises:
-        ValueError: If ``y`` has more than 2 dimensions or is already 2-D
-            with a second dimension other than 1.
+        ValueError: If y has more than 2 dimensions or is already 2-D with a second dimension other than 1.
     """
     if y.dim() == 1:
         return y.unsqueeze(-1)
@@ -54,7 +53,7 @@ def ensure_2d_y(y: torch.Tensor) -> torch.Tensor:
 
 
 # ---------------------------------------------------------------------------
-# Observation
+# Observation Class (Collection of the data)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -62,11 +61,11 @@ class Observation:
     """Result of one call to ``problem.observe(X)``.
 
     Attributes:
-        X: Queried points, shape ``(n, dim)``.
+        X: Queried points, shape (n, dim).
         y_obs: Noisy observations returned to the BO algorithm, shape
-            ``(n, 1)``.  This is the only quantity the algorithm should
+            (n, 1).  This is the only quantity the algorithm should
             use for model training and acquisition optimisation.
-        f_noiseless: True underlying values, shape ``(n, 1)``, or ``None``.
+        f_noiseless: True underlying values, shape (n, 1), or None.
             Available only for synthetic benchmarks where the ground truth is
             known.  Must not be used by the BO algorithm; reserved for
             post-hoc evaluation metrics and diagnostics.
@@ -80,9 +79,13 @@ class Observation:
     metadata: Optional[dict[str, Any]] = field(default=None)
 
     def __post_init__(self) -> None:
+        self.y_obs = ensure_2d_y(self.y_obs)
+
+        if self.f_noiseless is not None:
+            self.f_noiseless = ensure_2d_y(self.f_noiseless)
         if self.y_obs.shape != self.X.shape[:1] + (1,):
             raise ValueError(
-                f"y_obs must have shape (n, 1), got {tuple(self.y_obs.shape)} "
+                f"y_obs must have shape {self.X.shape[:1] + (1,)}, got {tuple(self.y_obs.shape)} "
                 f"for X of shape {tuple(self.X.shape)}"
             )
         if self.f_noiseless is not None and self.f_noiseless.shape != self.y_obs.shape:
@@ -99,9 +102,9 @@ class Observation:
 class ProblemSpec(ABC):
     """Abstract base class for all BO problems.
 
-    Subclasses must implement :meth:`observe`.
+    Subclasses must implement : meth:`observe`.
 
-    For synthetic benchmarks, :meth:`has_noiseless` should be overridden to
+    For synthetic benchmarks, meth:`has_noiseless` should be overridden to
     return ``True`` and ``observe`` should populate ``f_noiseless``.
 
     For real-data problems, ``has_noiseless`` returns ``False`` (default) and
@@ -111,11 +114,10 @@ class ProblemSpec(ABC):
         name: Human-readable problem identifier.
         dim: Input dimension.
         bounds: Box bounds, shape ``(2, dim)``.  ``bounds[0]`` is the lower
-            bound and ``bounds[1]`` is the upper bound.
+            bound and ``bounds[1]`` is the upper bound. (For instance if in dimension 3 : [0,1]*[-1,2]*[1,5] for bounds [0,-1,1]*[1,2,5])
         target: Scalar target value used in target-matching experiments.
         problem_type: String tag, e.g. ``"synthetic"`` or ``"real_data"``.
-        default_noise_std: Default observation noise standard deviation, or
-            ``None`` if noise is not fixed at problem level.
+        default_noise_std: Default observation noise standard deviation, or "None" if noise is not fixed at problem level.
     """
 
     def __init__(
@@ -123,60 +125,44 @@ class ProblemSpec(ABC):
         name: str,
         dim: int,
         bounds: torch.Tensor,
-        target: float,
         problem_type: str,
-        default_noise_std: Optional[float] = None,
-    ) -> None:
+        default_noise_std: Optional[float] = None,) -> None:
+
         if bounds.shape != (2, dim):
-            raise ValueError(
-                f"bounds must have shape (2, dim)={(2, dim)}, got {tuple(bounds.shape)}"
-            )
+            raise ValueError(f"bounds must have shape (2, dim)={(2, dim)}, got {tuple(bounds.shape)}")
         self.name = name
         self.dim = dim
         self.bounds = bounds.to(torch.double)
-        self.target = target
         self.problem_type = problem_type
         self.default_noise_std = default_noise_std
 
     # ------------------------------------------------------------------
     # Abstract interface
     # ------------------------------------------------------------------
+    def observe(self, X: torch.Tensor, **kwargs: Any) -> Observation:
+        """Query the problem at points ``X`` and return an Observation.
+        This public method is shared by all problems. It validates and normalises
+        X before delegating the problem-specific observation logic to
+        ``_observe_prepared``.
+        """
+        X = self.prepare_X(X)
+        return self._observe_prepared(X, **kwargs)
+
 
     @abstractmethod
-    def observe(self, X: torch.Tensor, **kwargs: Any) -> Observation:
-        """Query the problem at points ``X`` and return an :class:`Observation`.
+    def _observe_prepared(self, X: torch.Tensor, **kwargs: Any) -> Observation:
+        """Problem-specific observation logic.
 
-        The BO loop calls this method and must train only on the returned
-        ``obs.y_obs``.  ``obs.f_noiseless`` may be used for post-hoc
-        evaluation if :meth:`has_noiseless` returns ``True``.
-
-        Args:
-            X: Query points, shape ``(n, dim)``.
-            **kwargs: Problem-specific keyword arguments (e.g. noise override).
-
-        Returns:
-            An :class:`Observation` with ``y_obs`` of shape ``(n, 1)`` and
-            ``f_noiseless`` of shape ``(n, 1)`` or ``None``.
+        Here X is guaranteed to have shape ``(n, dim)`` and dtype ``torch.double``.
+        Concrete subclasses must implement this method.
         """
         raise NotImplementedError
-
-    # ------------------------------------------------------------------
-    # Overridable helpers
-    # ------------------------------------------------------------------
-
-    def has_noiseless(self) -> bool:
-        """Return ``True`` if this problem provides ``f_noiseless`` values.
-
-        Synthetic benchmarks should override this to return ``True``.
-        Real-data problems return ``False`` (the default).
-        """
-        return False
 
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
 
-    def validate_X(self, X: torch.Tensor) -> torch.Tensor:
+    def prepare_X(self, X: torch.Tensor) -> torch.Tensor:
         """Validate and normalise query points.
 
         - Promotes a single point of shape ``(dim,)`` to ``(1, dim)``.
@@ -202,6 +188,18 @@ class ProblemSpec(ABC):
         return X
 
     # ------------------------------------------------------------------
+    # Overridable helpers
+    # ------------------------------------------------------------------
+
+    def has_noiseless(self) -> bool:
+        """Return ``True`` if this problem provides ``f_noiseless`` values.
+
+        Synthetic benchmarks should override this to return ``True``.
+        Real-data problems return ``False`` (the default).
+        """
+        return False
+
+    # ------------------------------------------------------------------
     # Metadata
     # ------------------------------------------------------------------
 
@@ -211,7 +209,6 @@ class ProblemSpec(ABC):
             "name": self.name,
             "dim": self.dim,
             "bounds": self.bounds.tolist(),
-            "target": self.target,
             "problem_type": self.problem_type,
             "default_noise_std": self.default_noise_std,
         }
