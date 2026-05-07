@@ -127,8 +127,7 @@ def fit_single_task_gp(
     return model
 
 
-def fit_model_list_gp(
-    train_Xs: list[torch.Tensor],
+def fit_model_list_gp(train_Xs: list[torch.Tensor],
     train_Ys: list[torch.Tensor],
     noise_stds: Optional[list[Optional[float]]] = None,
     ) -> ModelListGP:
