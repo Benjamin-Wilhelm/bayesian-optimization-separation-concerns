@@ -33,7 +33,7 @@ from gpytorch.mlls import ExactMarginalLogLikelihood
 def validate_training_data(
     train_X: torch.Tensor,
     train_Y: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
     """Validate and normalise training tensors.
 
     - Casts both tensors to ``torch.double``.
@@ -80,7 +80,7 @@ def fit_single_task_gp(
     train_X: torch.Tensor,
     train_Y: torch.Tensor,
     noise_std: Optional[float] = None,
-) -> SingleTaskGP:
+    ) -> SingleTaskGP:
     """Construct and fit a SingleTaskGP on raw noisy observations.
 
     ``train_Y`` must be ``obs.y_obs`` — the noisy observations returned by
@@ -131,7 +131,7 @@ def fit_model_list_gp(
     train_Xs: list[torch.Tensor],
     train_Ys: list[torch.Tensor],
     noise_stds: Optional[list[Optional[float]]] = None,
-) -> ModelListGP:
+    ) -> ModelListGP:
     """Fit one SingleTaskGP per task and return a ModelListGP.
 
     Each output is modelled independently.  Useful as a building block for
@@ -177,10 +177,7 @@ def fit_model_list_gp(
 # Prediction
 # ---------------------------------------------------------------------------
 
-def get_posterior_mean_var(
-    model: SingleTaskGP,
-    X: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+def get_posterior_mean_var(model: SingleTaskGP, X: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Return posterior mean and marginal variance at test points.
 
     Intended for diagnostics, plotting, and acquisition debugging.
@@ -232,9 +229,7 @@ def _single_gp_hyperparameters(model: SingleTaskGP) -> dict[str, Any]:
     return params
 
 
-def get_hyperparameters(
-    model: SingleTaskGP | ModelListGP,
-) -> dict[str, Any]:
+def get_hyperparameters(model: SingleTaskGP | ModelListGP,) -> dict[str, Any]:
     """Extract learned GP hyperparameters as a serialisable dict.
 
     Handles both :class:`~botorch.models.SingleTaskGP` and
