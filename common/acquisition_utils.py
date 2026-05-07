@@ -44,7 +44,7 @@ def optimize_acquisition(
     raw_samples: int = _DEFAULT_RAW_SAMPLES,
     fixed_features: Optional[dict[int, float]] = None,
     options: Optional[dict[str, Any]] = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
     """Optimise an acquisition function over a box-constrained domain.
 
     Wraps :func:`botorch.optim.optimize_acqf` with sensible defaults and
@@ -126,7 +126,7 @@ def suggest_next_point(
     num_restarts: int = _DEFAULT_NUM_RESTARTS,
     raw_samples: int = _DEFAULT_RAW_SAMPLES,
     options: Optional[dict[str, Any]] = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return the single best next candidate under ``acq_fn``.
 
     Convenience wrapper around :func:`optimize_acquisition` for the common
@@ -162,7 +162,7 @@ def suggest_next_point(
 def clamp_variance(
     variance: torch.Tensor,
     min_variance: float = 1e-6,
-) -> torch.Tensor:
+    ) -> torch.Tensor:
     """Clamp predictive variance to a positive lower bound.
 
     Posterior variance can become numerically negative due to floating-point
