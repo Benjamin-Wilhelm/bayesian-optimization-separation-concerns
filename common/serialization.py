@@ -140,7 +140,7 @@ def save_csv(
     rows: list[dict[str, Any]],
     path: Union[str, Path],
     fieldnames: list[str] | None = None,
-) -> None:
+    ) -> None:
     """Write a list of dicts to a CSV file.
 
     Args:
