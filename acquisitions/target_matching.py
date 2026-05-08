@@ -1,11 +1,19 @@
-"""Target-matching acquisition functions for Experiment A (SoC-compliant).
+"""Target-matching acquisition functions for Experiment A.
 
-The GP is trained on raw noisy observations ``y_obs ≈ f(x)``.
-The target ``T`` appears only here, in the acquisition.
+Two approaches are implemented here to support the SoC comparison:
 
-This separation is the core principle of the SoC experimental design:
-the model represents the unknown phenomenon; the decision objective
-(proximity to target) lives exclusively in the acquisition.
+RIGHT — ``TargetMatchingUCB``
+    GP trained on raw ``y_obs ≈ f(x)``.  Target ``T`` appears only in
+    the acquisition as ``-|mu_f - T| + sqrt(beta) * sigma_f``.
+    This is the SoC-compliant method.
+
+WRONG — ``WrongTargetMatchingUCB``
+    GP trained on the transformed observations ``g(x) = |y_obs - T|``.
+    Acquisition is a standard LCB on ``g``: ``-mu_g + sqrt(beta) * sigma_g``.
+    This is the SoC-violating baseline; it breaks RKHS regularity assumptions
+    because ``g`` is non-smooth at points where ``f(x) = T``.
+    The target ``T`` is absorbed into the training data and is therefore
+    invisible to this class — the model already encodes it.
 """
 
 from __future__ import annotations
@@ -119,4 +127,107 @@ class TargetMatchingUCB(AnalyticAcquisitionFunction):
         value = -distance_to_target + sqrt_beta * sigma  # (..., 1, 1)
 
         # squeeze q=1 and output=1 dimensions -> shape batch_shape
+        return value.squeeze(-1).squeeze(-1)
+
+
+# ---------------------------------------------------------------------------
+# WRONG baseline
+# ---------------------------------------------------------------------------
+
+class WrongTargetMatchingUCB(AnalyticAcquisitionFunction):
+"""SoC-violating target-matching baseline based on LCB.
+
+This class implements the WRONG baseline for Experiment A.
+
+The GP is trained externally on the transformed target-distance observations
+
+    g_obs(x) = |y_obs(x) - T|,
+
+so its posterior models the transformed function g(x) = |f(x) - T| rather
+than the raw function f(x).
+
+Since the goal is to minimize g, we use a lower-confidence-bound criterion
+
+    a_wrong_t(x) = mu_g,t(x) - sqrt(beta_t) * sigma_g,t(x).
+
+BoTorch maximizes acquisition functions, so this class returns
+
+    alpha_wrong_t(x) = -mu_g,t(x) + sqrt(beta_t) * sigma_g,t(x).
+
+Interpretation:
+    Points are attractive when the model predicts a small target distance
+    or when posterior uncertainty is large.
+
+Why this is a SoC violation:
+    The target T is baked into the training data through |y_obs - T|.
+    The GP no longer models the raw phenomenon f; it models a
+    decision-dependent transformation of f. When f crosses the target,
+    g(x) = |f(x) - T| may develop a kink, which can violate the smoothness
+    and RKHS regularity assumptions used in GP-UCB-style analyses.
+
+This class does not receive T explicitly. The target has already been used
+by the caller when constructing the transformed training labels.
+
+Args:
+    model: BoTorch GP model fitted on transformed observations |y_obs - T|.
+        Must have a single output.
+    beta: Nonnegative exploration parameter beta_t.
+
+Example:
+    g_obs = (y_obs - target).abs()
+    model_wrong = fit_single_task_gp(train_X, g_obs)
+
+    acq = WrongTargetMatchingUCB(model=model_wrong, beta=2.0)
+
+    candidate, acq_value = optimize_acqf(
+        acq_function=acq,
+        bounds=bounds,
+        q=1,
+        num_restarts=10,
+        raw_samples=256,
+    )
+"""
+
+    def __init__(
+        self,
+        model: SingleTaskGP,
+        beta: float = 2.0,
+    ) -> None:
+        super().__init__(model=model)
+
+        if beta < 0:
+            raise ValueError(f"beta must be non-negative, got {beta}")
+        self.beta: float = float(beta)
+
+    @t_batch_mode_transform()
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate the WRONG target-matching LCB acquisition at ``X``.
+
+        Args:
+            X: Candidate tensor of shape ``batch_shape x 1 x d``.
+                Sequential (q=1) only.
+
+        Returns:
+            Tensor of shape ``batch_shape``.
+
+        Raises:
+            ValueError: If the ``q`` dimension of ``X`` is not 1.
+        """
+        if X.shape[-2] != 1:
+            raise ValueError(
+                f"WrongTargetMatchingUCB supports q=1 only, got q={X.shape[-2]}."
+            )
+
+        posterior = self.model.posterior(X)
+
+        # shapes: batch_shape x q x 1  (single output)
+        mean = posterior.mean
+        variance = posterior.variance.clamp_min(_MIN_VARIANCE)
+        sigma = variance.sqrt()
+
+        sqrt_beta = math.sqrt(self.beta)
+
+        # LCB negated for maximisation: -mu_g + sqrt(beta) * sigma_g
+        value = -mean + sqrt_beta * sigma  # (..., 1, 1)
+
         return value.squeeze(-1).squeeze(-1)
