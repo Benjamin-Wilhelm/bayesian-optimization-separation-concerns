@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import torch
-from botorch.fit import fit_gpytorch_mll
+from botorch.fit import fit_gpytorch_model
 from botorch.models import ModelListGP, SingleTaskGP
 from botorch.models.transforms.input import Normalize
 from botorch.models.transforms.outcome import Standardize
@@ -122,7 +122,7 @@ def fit_single_task_gp(
         )
 
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
-    fit_gpytorch_mll(mll)
+    fit_gpytorch_model(mll)
     model.eval()
     return model
 
