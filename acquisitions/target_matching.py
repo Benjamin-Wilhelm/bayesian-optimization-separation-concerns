@@ -135,58 +135,59 @@ class TargetMatchingUCB(AnalyticAcquisitionFunction):
 # ---------------------------------------------------------------------------
 
 class WrongTargetMatchingUCB(AnalyticAcquisitionFunction):
-"""SoC-violating target-matching baseline based on LCB.
+    """SoC-violating target-matching baseline based on LCB.
 
-This class implements the WRONG baseline for Experiment A.
+    This class implements the WRONG baseline for Experiment A.
 
-The GP is trained externally on the transformed target-distance observations
+    The GP is trained externally on the transformed target-distance observations
 
-    g_obs(x) = |y_obs(x) - T|,
+        g_obs(x) = |y_obs(x) - T|,
 
-so its posterior models the transformed function g(x) = |f(x) - T| rather
-than the raw function f(x).
+    so its posterior models the transformed function g(x) = |f(x) - T| rather
+    than the raw function f(x).
 
-Since the goal is to minimize g, we use a lower-confidence-bound criterion
+    Since the goal is to minimize g, we use a lower-confidence-bound criterion
 
-    a_wrong_t(x) = mu_g,t(x) - sqrt(beta_t) * sigma_g,t(x).
+        a_wrong_t(x) = mu_g,t(x) - sqrt(beta_t) * sigma_g,t(x).
 
-BoTorch maximizes acquisition functions, so this class returns
+    BoTorch maximizes acquisition functions, so this class returns
 
-    alpha_wrong_t(x) = -mu_g,t(x) + sqrt(beta_t) * sigma_g,t(x).
+        alpha_wrong_t(x) = -mu_g,t(x) + sqrt(beta_t) * sigma_g,t(x).
 
-Interpretation:
-    Points are attractive when the model predicts a small target distance
-    or when posterior uncertainty is large.
+    Interpretation:
+        Points are attractive when the model predicts a small target distance
+        or when posterior uncertainty is large.
 
-Why this is a SoC violation:
-    The target T is baked into the training data through |y_obs - T|.
-    The GP no longer models the raw phenomenon f; it models a
-    decision-dependent transformation of f. When f crosses the target,
-    g(x) = |f(x) - T| may develop a kink, which can violate the smoothness
-    and RKHS regularity assumptions used in GP-UCB-style analyses.
+    Why this is a SoC violation:
+        The target T is baked into the training data through |y_obs - T|.
+        The GP no longer models the raw phenomenon f; it models a
+        decision-dependent transformation of f. When f crosses the target,
+        g(x) = |f(x) - T| may develop a kink, which can violate the smoothness
+        and RKHS regularity assumptions used in GP-UCB-style analyses.
 
-This class does not receive T explicitly. The target has already been used
-by the caller when constructing the transformed training labels.
+    This class does not receive T explicitly. The target has already been used
+    by the caller when constructing the transformed training labels.
 
-Args:
-    model: BoTorch GP model fitted on transformed observations |y_obs - T|.
-        Must have a single output.
-    beta: Nonnegative exploration parameter beta_t.
+    Args:
+        model: BoTorch GP model fitted on transformed observations |y_obs - T|.
+            Must have a single output.
+        beta: Nonnegative exploration parameter beta_t.
 
-Example:
-    g_obs = (y_obs - target).abs()
-    model_wrong = fit_single_task_gp(train_X, g_obs)
+    Example::
 
-    acq = WrongTargetMatchingUCB(model=model_wrong, beta=2.0)
+        g_obs = (y_obs - target).abs()
+        model_wrong = fit_single_task_gp(train_X, g_obs)
 
-    candidate, acq_value = optimize_acqf(
-        acq_function=acq,
-        bounds=bounds,
-        q=1,
-        num_restarts=10,
-        raw_samples=256,
-    )
-"""
+        acq = WrongTargetMatchingUCB(model=model_wrong, beta=2.0)
+
+        candidate, acq_value = optimize_acqf(
+            acq_function=acq,
+            bounds=bounds,
+            q=1,
+            num_restarts=10,
+            raw_samples=256,
+        )
+    """
 
     def __init__(
         self,
