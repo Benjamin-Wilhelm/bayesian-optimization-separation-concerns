@@ -180,7 +180,7 @@ _H6_P = 1e-4 * torch.tensor(
 
 
 class Hartmann6D(SyntheticBenchmark):
-   """6-D Hartmann benchmark function.
+    """6-D Hartmann benchmark function.
 
     - 6-dimensional multi-modal function on [0, 1]^6
     - Highly non-convex with several local minima
@@ -203,8 +203,7 @@ class Hartmann6D(SyntheticBenchmark):
             name="hartmann_6d",
             dim=6,
             bounds=bounds,
-            default_noise_std=noise_std,
-        )
+            default_noise_std=noise_std,)
 
     def f(self, X: torch.Tensor) -> torch.Tensor:
         # Move constants to the same device as X.

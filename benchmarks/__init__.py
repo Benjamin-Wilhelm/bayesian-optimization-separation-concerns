@@ -9,8 +9,7 @@ from benchmarks.toy import (
     DEFAULT_NOISE_STD_SINE_TREND1D,
     Forrester1D,
     Hartmann6D,
-    SineTrend1D,
-)
+    SineTrend1D,)
 
 __all__ = [
     "SyntheticBenchmark",
