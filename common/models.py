@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 import torch
 from botorch.fit import fit_gpytorch_model
-from botorch.models import ModelListGP, SingleTaskGP
+from botorch.models import ModelListGP, SingleTaskGP, FixedNoiseGP
 from botorch.models.transforms.input import Normalize
 from botorch.models.transforms.outcome import Standardize
 from gpytorch.mlls import ExactMarginalLogLikelihood
@@ -106,7 +106,7 @@ def fit_single_task_gp(
 
     if noise_std is not None:
         train_Yvar = torch.full_like(train_Y, noise_std ** 2)
-        model = SingleTaskGP(
+        model = FixedNoiseGP(
             train_X=train_X,
             train_Y=train_Y,
             train_Yvar=train_Yvar,
