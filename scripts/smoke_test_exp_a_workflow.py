@@ -39,6 +39,13 @@ from common.models import fit_single_task_gp
 from common.logging import RunLogger
 from common.metrics import target_distance
 from acquisitions.target_matching import TargetMatchingUCB, WrongTargetMatchingUCB
+from data.results import (
+    ExperimentSeedResult,
+    MethodProcessedResult,
+    MethodRawResult,
+    SeedMetadata,
+    StepResult,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -50,11 +57,11 @@ TAG          = "smoke_test_1d"
 SEED         = 0
 TARGET       = 0.5
 BETA         = 2.0
-N_INITIAL    = 5
-BUDGET       = 8
+N_INITIAL    = 20
+BUDGET       = 50
 NOISE_STD    = 0.01    # overrides SineTrend1D default for a cleaner smoke run
-NUM_RESTARTS = 5
-RAW_SAMPLES  = 64
+NUM_RESTARTS = 10
+RAW_SAMPLES  = 256
 
 
 # ---------------------------------------------------------------------------
@@ -78,29 +85,6 @@ def posterior_stats(model, X_cand: torch.Tensor) -> tuple[float, float]:
     return mean, std
 
 
-def record_step(
-    iteration: int,
-    x_cand: torch.Tensor,
-    y_obs_val: torch.Tensor,
-    f_val: torch.Tensor,
-    acq_value: torch.Tensor,
-    train_size: int,
-    posterior_mean: float,
-    posterior_std: float,
-    target: float,
-    ) -> dict:
-    """Build one trajectory entry; all tensors converted to plain Python."""
-    return {
-        "iteration":                   iteration,
-        "x":                           x_cand.squeeze().tolist(),
-        "y_obs":                       y_obs_val.squeeze().item(),
-        "f_noiseless":                 f_val.squeeze().item(),
-        "target_distance":             abs(f_val.squeeze().item() - target),
-        "acq_value":                   acq_value.item(),
-        "train_size":                  train_size,
-        "posterior_mean_at_candidate": posterior_mean,
-        "posterior_std_at_candidate":  posterior_std,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -187,8 +171,8 @@ def main() -> None:
     Y_wrong = obs_init.y_obs.clone()           # raw observations (untransformed)
     F_wrong = obs_init.f_noiseless.clone()
 
-    traj_right: list[dict] = []
-    traj_wrong: list[dict] = []
+    traj_right: list[StepResult] = []
+    traj_wrong: list[StepResult] = []
 
     # ── BO loop ───────────────────────────────────────────────────────────────
     log.info("-" * 60)
@@ -218,7 +202,7 @@ def main() -> None:
         obs_right = problem.observe(cand_right)
         mu_r, sigma_r = posterior_stats(model_right, cand_right)
 
-        traj_right.append(record_step(
+        traj_right.append(StepResult.from_tensors(
             iteration=iteration,
             x_cand=cand_right,
             y_obs_val=obs_right.y_obs,
@@ -262,7 +246,7 @@ def main() -> None:
         obs_wrong = problem.observe(cand_wrong)
         mu_w, sigma_w = posterior_stats(model_wrong, cand_wrong)
 
-        traj_wrong.append(record_step(
+        traj_wrong.append(StepResult.from_tensors(
             iteration=iteration,
             x_cand=cand_wrong,
             y_obs_val=obs_wrong.y_obs,
@@ -295,42 +279,43 @@ def main() -> None:
 
     best_td_right = float(dist_right.min())
     best_td_wrong = float(dist_wrong.min())
-    best_x_right  = float(X_right[int(dist_right.argmin())].item())
-    best_x_wrong  = float(X_wrong[int(dist_wrong.argmin())].item())
+    best_x_right  = X_right[int(dist_right.argmin())].squeeze(0).tolist()
+    best_x_wrong  = X_wrong[int(dist_wrong.argmin())].squeeze(0).tolist()
 
-    # ── Build and save result dict ────────────────────────────────────────────
-    result = {
-        "metadata": {
-            "experiment":          EXPERIMENT,
-            "problem_type":        problem.problem_type,
-            "benchmark":           problem.name,
-            "seed":                SEED,
-            "budget":              BUDGET,
-            "initial_design_size": N_INITIAL,
-            "target":              TARGET,
-            "noise_std":           NOISE_STD,
+    # ── Build and save result dataclass ──────────────────────────────────────
+    metadata = SeedMetadata(
+        experiment=EXPERIMENT,
+        problem_type=problem.problem_type,
+        benchmark=problem.name,
+        seed=SEED,
+        budget=BUDGET,
+        initial_design_size=N_INITIAL,
+        target=TARGET,
+        noise_std=NOISE_STD,
+    )
+    result = ExperimentSeedResult(
+        metadata=metadata,
+        raw_results={
+            "right_target_matching_ucb": MethodRawResult("right_target_matching_ucb", traj_right),
+            "wrong_gp_on_abs_lcb":       MethodRawResult("wrong_gp_on_abs_lcb",       traj_wrong),
         },
-        "methods": {
-            "right_target_matching_ucb": {
-                "trajectory":    traj_right,
-                "final_metrics": {
-                    "best_target_distance": best_td_right,
-                    "best_x":               best_x_right,
-                    "n_evaluations":        N_INITIAL + BUDGET,
-                },
-            },
-            "wrong_gp_on_abs_lcb": {
-                "trajectory":    traj_wrong,
-                "final_metrics": {
-                    "best_target_distance": best_td_wrong,
-                    "best_x":               best_x_wrong,
-                    "n_evaluations":        N_INITIAL + BUDGET,
-                },
-            },
+        processed_results={
+            "right_target_matching_ucb": MethodProcessedResult(
+                method_name="right_target_matching_ucb",
+                best_target_distance=best_td_right,
+                best_x=best_x_right,
+                n_evaluations=N_INITIAL + BUDGET,
+            ),
+            "wrong_gp_on_abs_lcb": MethodProcessedResult(
+                method_name="wrong_gp_on_abs_lcb",
+                best_target_distance=best_td_wrong,
+                best_x=best_x_wrong,
+                n_evaluations=N_INITIAL + BUDGET,
+            ),
         },
-    }
+    )
 
-    seed_path = logger.save_seed_result(problem.name, seed=SEED, result=result)
+    seed_path = logger.save_seed_result(problem.name, seed=SEED, result=result.to_dict())
     logger.save_processed("summary.json", {
         "benchmark": problem.name,
         "seed":      SEED,
@@ -349,10 +334,10 @@ def main() -> None:
     log.info("-" * 60)
     log.info("Last 3 RIGHT iterations:")
     for s in traj_right[-3:]:
-        log.info(f"    iter={s['iteration']:>2}  x={s['x']:.4f}  |f-T|={s['target_distance']:.4f}")
+        log.info(f"    iter={s.iteration:>2}  x={s.x[0]:.4f}  |f-T|={s.target_distance:.4f}")
     log.info("Last 3 WRONG iterations:")
     for s in traj_wrong[-3:]:
-        log.info(f"    iter={s['iteration']:>2}  x={s['x']:.4f}  |f-T|={s['target_distance']:.4f}")
+        log.info(f"    iter={s.iteration:>2}  x={s.x[0]:.4f}  |f-T|={s.target_distance:.4f}")
     log.info("=" * 60)
 
 
