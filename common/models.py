@@ -336,7 +336,12 @@ class GPModelBuilder:
         params: dict[str, Any] = {}
 
         try:
-            params["noise_variance"] = model.likelihood.noise.item()
+            noise = model.likelihood.noise.detach().squeeze()
+            params["noise_variance_standardized"] = float(noise.mean().item())
+            std = model.outcome_transform.stdvs.detach().flatten()
+            params["outcome_std"] = float(std.mean().item())
+            params["noise_variance_raw"] = params["noise_variance_standardized"] * params["outcome_std"] ** 2
+        
         except AttributeError:
             pass
 
