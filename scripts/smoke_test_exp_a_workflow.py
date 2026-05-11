@@ -35,7 +35,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from benchmarks.toy import SineTrend1D
 from common.initial_design import sobol_design
-from common.models import fit_single_task_gp
+from common.models import GPModelBuilder, GPModelConfig, ModelState
 from common.logging import RunLogger
 from common.metrics import target_distance
 from acquisitions.target_matching import TargetMatchingUCB, WrongTargetMatchingUCB
@@ -54,37 +54,14 @@ from data.results import (
 
 EXPERIMENT   = "exp_a_target_matching"
 TAG          = "smoke_test_1d"
-SEED         = 0
+SEED         = 20
 TARGET       = 0.5
 BETA         = 2.0
 N_INITIAL    = 20
-BUDGET       = 50
+BUDGET       = 10
 NOISE_STD    = 0.01    # overrides SineTrend1D default for a cleaner smoke run
 NUM_RESTARTS = 10
 RAW_SAMPLES  = 256
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def posterior_stats(model, X_cand: torch.Tensor) -> tuple[float, float]:
-    """Return (mean, std) of the posterior at a single candidate point.
-
-    Args:
-        model: Fitted SingleTaskGP.
-        X_cand: shape (1, dim).
-
-    Returns:
-        (mean_val, std_val) as Python floats.
-    """
-    with torch.no_grad():
-        post = model.posterior(X_cand.unsqueeze(0))
-        mean = post.mean.squeeze().item()
-        std  = post.variance.clamp_min(1e-10).sqrt().squeeze().item()
-    return mean, std
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +150,12 @@ def main() -> None:
 
     traj_right: list[StepResult] = []
     traj_wrong: list[StepResult] = []
+    model_states_right: list[ModelState] = []
+    model_states_wrong: list[ModelState] = []
+
+    # Both methods use a fixed noise_std; create builders once before the loop.
+    builder_right = GPModelBuilder(GPModelConfig(noise_std=problem.default_noise_std))
+    builder_wrong = GPModelBuilder(GPModelConfig(noise_std=problem.default_noise_std))
 
     # ── BO loop ───────────────────────────────────────────────────────────────
     log.info("-" * 60)
@@ -188,7 +171,8 @@ def main() -> None:
         # ── RIGHT: GP on raw y_obs, TargetMatchingUCB ─────────────────────────
         # Noise variance is fixed and known from the benchmark, so we pass it
         # explicitly to avoid re-estimating it via MLL.
-        model_right = fit_single_task_gp(X_right, Y_right, noise_std=problem.default_noise_std)
+        model_right = builder_right.fit(X_right, Y_right)
+        model_states_right.append(builder_right.capture_state(model_right, iteration))
         acq_right   = TargetMatchingUCB(model=model_right, target=TARGET, beta=BETA)
 
         cand_right, acq_val_right = optimize_acqf(
@@ -200,7 +184,9 @@ def main() -> None:
         )   # cand_right: (1, dim)
 
         obs_right = problem.observe(cand_right)
-        mu_r, sigma_r = posterior_stats(model_right, cand_right)
+        mean_r, var_r = builder_right.predict(model_right, cand_right)
+        mu_r    = mean_r.squeeze().item()
+        sigma_r = var_r.clamp_min(1e-10).sqrt().squeeze().item()
 
         traj_right.append(StepResult.from_tensors(
             iteration=iteration,
@@ -231,7 +217,8 @@ def main() -> None:
         # The noise on g = |y_obs - T| is not simply Gaussian (it is folded
         # near the target), so we let the model infer the noise level here.
         G_wrong     = (Y_wrong - TARGET).abs()
-        model_wrong = fit_single_task_gp(X_wrong, G_wrong, noise_std=problem.default_noise_std)
+        model_wrong = builder_wrong.fit(X_wrong, G_wrong)
+        model_states_wrong.append(builder_wrong.capture_state(model_wrong, iteration))
         acq_wrong   = WrongTargetMatchingUCB(model=model_wrong, beta=BETA)
 
         cand_wrong, acq_val_wrong = optimize_acqf(
@@ -244,7 +231,9 @@ def main() -> None:
 
         # Observe the raw function — NOT the transformed g.
         obs_wrong = problem.observe(cand_wrong)
-        mu_w, sigma_w = posterior_stats(model_wrong, cand_wrong)
+        mean_w, var_w = builder_wrong.predict(model_wrong, cand_wrong)
+        mu_w    = mean_w.squeeze().item()
+        sigma_w = var_w.clamp_min(1e-10).sqrt().squeeze().item()
 
         traj_wrong.append(StepResult.from_tensors(
             iteration=iteration,
@@ -316,6 +305,10 @@ def main() -> None:
     )
 
     seed_path = logger.save_seed_result(problem.name, seed=SEED, result=result.to_dict())
+    logger.save_processed("model_diagnostics.json", {
+        "right_target_matching_ucb": [s.to_dict() for s in model_states_right],
+        "wrong_gp_on_abs_lcb":       [s.to_dict() for s in model_states_wrong],
+    })
     logger.save_processed("summary.json", {
         "benchmark": problem.name,
         "seed":      SEED,
@@ -338,6 +331,18 @@ def main() -> None:
     log.info("Last 3 WRONG iterations:")
     for s in traj_wrong[-3:]:
         log.info(f"    iter={s.iteration:>2}  x={s.x[0]:.4f}  |f-T|={s.target_distance:.4f}")
+    log.info("-" * 60)
+    log.info("Final model hyperparameters:")
+    for label, state in [("RIGHT", model_states_right[-1]), ("WRONG", model_states_wrong[-1])]:
+        hp = state.hyperparameters
+        log.info(
+            f"  {label}  type={state.model_type}  "
+            f"ls={hp.get('lengthscale', 'n/a')}  "
+            f"os={hp.get('outputscale', 'n/a'):.4f}  "
+            f"noise={hp.get('noise_variance_standardized', 'n/a'):.6f}"
+            f"std={hp.get('outcome_std', 'n/a'):.6f}"
+            f"noise_raw={hp.get('noise_variance_raw', 'n/a'):.6f}"
+        )
     log.info("=" * 60)
 
 
