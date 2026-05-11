@@ -58,7 +58,8 @@ class TargetMatchingUCB(AnalyticAcquisitionFunction):
             exploration.
 
     Example:
-        model = fit_single_task_gp(train_X, obs.y_obs)
+        builder = GPModelBuilder(GPModelConfig())
+        model = builder.fit(train_X, obs.y_obs)
 
         acq = TargetMatchingUCB(model=model, target=10.0, beta=2.0)
 
@@ -176,7 +177,8 @@ class WrongTargetMatchingUCB(AnalyticAcquisitionFunction):
     Example::
 
         g_obs = (y_obs - target).abs()
-        model_wrong = fit_single_task_gp(train_X, g_obs)
+        builder = GPModelBuilder(GPModelConfig())
+        model_wrong = builder.fit(train_X, g_obs)
 
         acq = WrongTargetMatchingUCB(model=model_wrong, beta=2.0)
 
