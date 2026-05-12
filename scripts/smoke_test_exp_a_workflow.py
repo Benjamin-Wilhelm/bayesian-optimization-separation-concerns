@@ -59,7 +59,7 @@ TARGET       = 0.5
 BETA         = 2.0
 N_INITIAL    = 20
 BUDGET       = 20
-NOISE_STD    = 0.01   # overrides SineTrend1D default for a cleaner smoke run
+NOISE_STD    = 0.00001   # overrides SineTrend1D default for a cleaner smoke run
 NUM_RESTARTS = 10
 RAW_SAMPLES  = 256
 
