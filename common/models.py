@@ -137,6 +137,9 @@ class ModelState:
             "hyperparameters": self.hyperparameters,
         }
 
+    def from_dict(cls, d: dict[str, Any]) -> ModelState :
+        return cls(d["iteration"], d["model_type"], d["kernel_name"], d["hyperparameters"])
+ 
 
 # ---------------------------------------------------------------------------
 # Builder
