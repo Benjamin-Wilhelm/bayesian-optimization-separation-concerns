@@ -28,6 +28,8 @@ from __future__ import annotations
 import dataclasses
 from typing import Any
 
+from common.models import ModelState
+
 
 @dataclasses.dataclass
 class StepResult:
@@ -112,11 +114,13 @@ class MethodRawResult:
 
     method_name: str
     trajectory: list[StepResult]
+    model_states: list[ModelState]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "method_name": self.method_name,
             "trajectory": [s.to_dict() for s in self.trajectory],
+            "model_states": [s.to_dict() for s in self.model_states],
         }
 
     @classmethod
@@ -124,6 +128,7 @@ class MethodRawResult:
         return cls(
             method_name=name,
             trajectory=[StepResult.from_dict(s) for s in d["trajectory"]],
+            model_states=[ModelState.from_dict(s) for s in d["model_states"]],
         )
 
 
@@ -225,6 +230,7 @@ class ExperimentSeedResult:
               "methods": {
                 "<method_name>": {
                   "trajectory":    [StepResult dicts],
+                  "model_states": [ModelState dicts]
                   "final_metrics": {best_target_distance, best_x, n_evaluations}
                 }
               }
@@ -235,7 +241,9 @@ class ExperimentSeedResult:
             processed = self.processed_results.get(name)
             methods[name] = {
                 "trajectory": [s.to_dict() for s in raw.trajectory],
+                "model_states": [s.to_dict() for s in raw.model_states],
                 "final_metrics": processed.to_dict() if processed is not None else {},
+                
             }
         return {
             "metadata": self.metadata.to_dict(),
