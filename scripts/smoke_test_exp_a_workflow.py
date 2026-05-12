@@ -58,8 +58,8 @@ SEED         = 20
 TARGET       = 0.5
 BETA         = 2.0
 N_INITIAL    = 20
-BUDGET       = 10
-NOISE_STD    = 0.01    # overrides SineTrend1D default for a cleaner smoke run
+BUDGET       = 20
+NOISE_STD    = 0.01   # overrides SineTrend1D default for a cleaner smoke run
 NUM_RESTARTS = 10
 RAW_SAMPLES  = 256
 
@@ -285,8 +285,8 @@ def main() -> None:
     result = ExperimentSeedResult(
         metadata=metadata,
         raw_results={
-            "right_target_matching_ucb": MethodRawResult("right_target_matching_ucb", traj_right),
-            "wrong_gp_on_abs_lcb":       MethodRawResult("wrong_gp_on_abs_lcb",       traj_wrong),
+            "right_target_matching_ucb": MethodRawResult("right_target_matching_ucb", traj_right, model_states_right),
+            "wrong_gp_on_abs_lcb":       MethodRawResult("wrong_gp_on_abs_lcb", traj_wrong, model_states_wrong),
         },
         processed_results={
             "right_target_matching_ucb": MethodProcessedResult(
@@ -339,9 +339,9 @@ def main() -> None:
             f"  {label}  type={state.model_type}  "
             f"ls={hp.get('lengthscale', 'n/a')}  "
             f"os={hp.get('outputscale', 'n/a'):.4f}  "
-            f"noise={hp.get('noise_variance_standardized', 'n/a'):.6f}"
-            f"std={hp.get('outcome_std', 'n/a'):.6f}"
-            f"noise_raw={hp.get('noise_variance_raw', 'n/a'):.6f}"
+            f"noise={hp.get('noise_variance_standardized', 'n/a'):.6f}  "
+            f"std={hp.get('outcome_std', 'n/a'):.6f}  "
+            f"noise_raw={hp.get('noise_variance_raw', 'n/a'):.6f}  "
         )
     log.info("=" * 60)
 
