@@ -127,6 +127,9 @@ class ModelState:
     model_type: str
     kernel_name: str
     hyperparameters: dict[str, Any]
+    train_X: torch.Tensor
+    train_Y: torch.Tensor
+    noise_std: float
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serialisable representation."""
