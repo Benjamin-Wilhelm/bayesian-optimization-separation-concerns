@@ -199,6 +199,23 @@ class ProblemSpec(ABC):
         """
         return False
 
+    def oracle_target_distance(self, target: float) -> Optional[float]:
+        """Return ``min_x |f(x) - target|`` over the problem domain, if known.
+
+        Used by :mod:`common.metrics` to compute the target-matching simple
+        regret ``min_t |f(x_t) - T| - min_x |f(x) - T|``.
+
+        - If the target is attainable (lies in the range of ``f``), returns ``0.0``.
+        - If the target is not attainable but the analytic minimum distance is
+          known, returns it.
+        - Returns ``None`` when the oracle value is not analytically available.
+          Callers should then either treat the simple regret as
+          ``min_t |f(x_t) - T|`` directly or estimate the oracle empirically.
+
+        The default implementation returns ``None``.
+        """
+        return None
+
     # ------------------------------------------------------------------
     # Metadata
     # ------------------------------------------------------------------
