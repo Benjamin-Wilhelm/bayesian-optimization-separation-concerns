@@ -460,26 +460,10 @@ def per_objective_best(
 # ---------------------------------------------------------------------------
 # Cross-run aggregation
 # ---------------------------------------------------------------------------
-
-def failure_rate(
-    metric_values: torch.Tensor,
-    threshold: float,
-    ) -> torch.Tensor:
-    """Fraction of runs where a metric **exceeds** a threshold.
-
-    Useful for computing the probability that simple regret or target
-    distance is above a tolerable level after a fixed budget.
-
-    Args:
-        metric_values: Per-seed scalar metric, shape ``(S,)``.
-        threshold: Failure criterion.  A run is counted as failed when
-            its metric value is strictly greater than ``threshold``.
-
-    Returns:
-        Scalar tensor in ``[0, 1]`` — the failure rate.
-    """
-    metric_values = _to_1d_double(metric_values, "metric_values")
-    return (metric_values > threshold).double().mean()
+#
+# Failure rate has been removed here.  It is intrinsically a cross-seed
+# summary and lives in :mod:`common.statistics` (``statistics.failure_rate``)
+# alongside the other aggregate utilities.
 
 
 def high_quantile(
