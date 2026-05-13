@@ -323,6 +323,26 @@ class RunLogger:
         """
         return load_json(self.seed_result_path(benchmark, seed))
 
+    def processed_per_seed_path(self, benchmark: str, seed: int) -> Path:
+        """Path for one per-seed processed file.
+
+        Layout: ``processed/per_seed/<benchmark>/seed_<NNN>_processed.json``.
+        The directory is created if missing.
+        """
+        d = self.run_dir / "processed" / "per_seed" / benchmark
+        d.mkdir(parents=True, exist_ok=True)
+        return d / f"seed_{seed:03d}_processed.json"
+
+    def processed_aggregate_path(self, benchmark: str, filename: str) -> Path:
+        """Path for one across-seed aggregate file under a benchmark.
+
+        Layout: ``processed/aggregate/<benchmark>/<filename>``.
+        The directory is created if missing.
+        """
+        d = self.run_dir / "processed" / "aggregate" / benchmark
+        d.mkdir(parents=True, exist_ok=True)
+        return d / filename
+
     def iter_seed_results(self, benchmark: str) -> list[dict[str, Any]]:
         """Load all seed result files for a benchmark, sorted by seed.
 
