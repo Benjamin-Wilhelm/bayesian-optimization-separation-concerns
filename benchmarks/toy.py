@@ -26,6 +26,13 @@ from benchmarks.synthetic import SyntheticBenchmark
 
 DEFAULT_NOISE_STD_SINE_TREND1D: float = 0.05
 
+# Numerical extrema of f(x) = sin(6x) + 0.3x on [0, 1], computed on a
+# dense grid (200_001 points).  Used by :meth:`SineTrend1D.oracle_target_distance`
+# to decide whether a target is attainable and, if not, return the closest
+# achievable target distance.
+_SINE_TREND1D_F_MIN: float = -0.7656308116
+_SINE_TREND1D_F_MAX: float =  1.0797900769
+
 
 class SineTrend1D(SyntheticBenchmark):
     """Pedagogical 1-D benchmark for interpretability and visualisation.
@@ -34,7 +41,7 @@ class SineTrend1D(SyntheticBenchmark):
 
     Smooth and unimodal enough to read easily in a figure, yet non-trivial
     due to the sinusoidal oscillation on top of a linear trend.
-    Range approximately [-0.77, 1.08].
+    Range approximately [-0.766, 1.080].
 
     Args:
         noise_std: Observation noise standard deviation.
@@ -52,6 +59,17 @@ class SineTrend1D(SyntheticBenchmark):
     def f(self, X: torch.Tensor) -> torch.Tensor:
         x = X[:, 0]
         return (torch.sin(6.0 * x) + 0.3 * x).unsqueeze(-1)
+
+    def oracle_target_distance(self, target: float) -> float:
+        """``min_x |f(x) - target|`` on ``[0, 1]``.
+
+        Zero whenever ``target`` lies in the range of ``f``, otherwise the
+        distance to the nearer end of the range.
+        """
+        if _SINE_TREND1D_F_MIN <= target <= _SINE_TREND1D_F_MAX:
+            return 0.0
+        return min(abs(target - _SINE_TREND1D_F_MIN),
+                   abs(target - _SINE_TREND1D_F_MAX))
 
 
 # ---------------------------------------------------------------------------

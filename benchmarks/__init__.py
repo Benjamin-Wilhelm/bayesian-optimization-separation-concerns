@@ -9,7 +9,19 @@ from benchmarks.toy import (
     DEFAULT_NOISE_STD_SINE_TREND1D,
     Forrester1D,
     Hartmann6D,
-    SineTrend1D,)
+    SineTrend1D,
+)
+
+# Look-up table used by ``process.py`` to re-instantiate a benchmark from its
+# metadata string (``benchmark.name``).  Keep keys in sync with each class's
+# ``name`` attribute.
+BENCHMARK_REGISTRY: dict[str, type[SyntheticBenchmark]] = {
+    "sine_trend_1d": SineTrend1D,
+    "forrester_1d":  Forrester1D,
+    "branin_2d":     Branin2D,
+    "hartmann_6d":   Hartmann6D,
+}
+
 
 __all__ = [
     "SyntheticBenchmark",
@@ -21,4 +33,5 @@ __all__ = [
     "DEFAULT_NOISE_STD_FORRESTER1D",
     "DEFAULT_NOISE_STD_BRANIN",
     "DEFAULT_NOISE_STD_HARTMANN6",
+    "BENCHMARK_REGISTRY",
 ]
