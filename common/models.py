@@ -1,20 +1,19 @@
 """Generic GP model utilities.
 
-Provides construction, fitting, prediction, and hyperparameter extraction
-for BoTorch GPs.  No task-specific or experiment-specific logic lives here.
+Provides construction, fitting, prediction, hyperparameter extraction, and
+deterministic reconstruction for BoTorch GPs.  No task-specific or
+experiment-specific logic lives here.
 
 Scientific contract: the BO loop trains on ``obs.y_obs`` only.  This module
 operates on plain tensors; the caller is responsible for passing the right
 quantity and must never pass ``f_noiseless`` as training targets.
 
-Usage::
+Two construction paths are exposed:
 
-    config = GPModelConfig(noise_std=0.05)
-    builder = GPModelBuilder(config)
-    model = builder.fit(obs.X, obs.y_obs)
-    mean, var = builder.predict(model, X_candidate)
-    state = builder.capture_state(model, iteration=t)
-    params = state.hyperparameters
+- :meth:`GPModelBuilder.fit`        — fresh model + MLL hyperparameter fitting.
+- :meth:`GPModelBuilder.construct`  — fresh model, **no** MLL fitting.  Used
+  by ``process.py`` together with :func:`load_state_dict_into` to rebuild a
+  GP from stored hyperparameters without any retraining.
 """
 
 from __future__ import annotations
@@ -103,46 +102,56 @@ class GPModelConfig:
 
 
 # ---------------------------------------------------------------------------
-# Model state
+# State-dict (de)serialisation
 # ---------------------------------------------------------------------------
 
-@dataclass
-class ModelState:
-    """Serialisable snapshot of a fitted GP at one BO iteration.
+def serialize_state_dict(model: torch.nn.Module) -> dict[str, Any]:
+    """Return a JSON-serialisable copy of ``model.state_dict()``.
 
-    Stores lightweight metadata and hyperparameters so that model diagnostics
-    can be reconstructed after the BO run without keeping the full model
-    objects in memory.
+    Each tensor parameter / buffer is converted via ``.tolist()``.  Scalar
+    (0-D) tensors are returned as Python ``float``; higher-rank tensors as
+    nested lists.  Shapes are preserved implicitly by the tolist round-trip.
 
-    Attributes:
-        iteration: BO iteration index (0-based).
-        model_type: Class name of the fitted model, e.g. ``"SingleTaskGP"``
-            or ``"FixedNoiseGP"``.
-        kernel_name: Kernel identifier from the config, e.g. ``"matern52"``.
-        hyperparameters: JSON-serialisable dict of learned hyperparameters
-            (lengthscale, outputscale, noise_variance).
+    Args:
+        model: Any ``torch.nn.Module``; in practice a fitted BoTorch GP.
+
+    Returns:
+        Dict ``{parameter_name: list | float}`` suitable for ``json.dump``.
     """
+    return {k: v.detach().cpu().tolist() for k, v in model.state_dict().items()}
 
-    iteration: int
-    model_type: str
-    kernel_name: str
-    hyperparameters: dict[str, Any]
-    train_X: torch.Tensor
-    train_Y: torch.Tensor
-    noise_std: float
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-serialisable representation."""
-        return {
-            "iteration": self.iteration,
-            "model_type": self.model_type,
-            "kernel_name": self.kernel_name,
-            "hyperparameters": self.hyperparameters,
-        }
+def load_state_dict_into(model: torch.nn.Module, serial: dict[str, Any]) -> None:
+    """Inverse of :func:`serialize_state_dict`.
 
-    def from_dict(cls, d: dict[str, Any]) -> ModelState :
-        return cls(d["iteration"], d["model_type"], d["kernel_name"], d["hyperparameters"])
- 
+    Coerces each stored entry to the dtype and shape of the corresponding
+    parameter in the freshly-constructed ``model``, then calls
+    ``model.load_state_dict(...)``.
+
+    Strict mode is enforced: every key in the stored dict must exist in the
+    target model and vice versa.  This catches silent botorch / kernel changes
+    between run and process.
+
+    Args:
+        model: Freshly-constructed GP with the same shape as the saved model
+            (same ``train_X``/``train_Y`` shapes, same transforms, same
+            kernel).  Typically produced by :meth:`GPModelBuilder.construct`.
+        serial: Dict produced by :func:`serialize_state_dict`.
+    """
+    template = model.state_dict()
+    if set(template.keys()) != set(serial.keys()):
+        missing = set(template.keys()) - set(serial.keys())
+        extra   = set(serial.keys()) - set(template.keys())
+        raise ValueError(
+            f"state_dict key mismatch.  Missing in stored state: {sorted(missing)}.  "
+            f"Extra in stored state: {sorted(extra)}."
+        )
+    new_state: dict[str, torch.Tensor] = {}
+    for k, v in serial.items():
+        target = template[k]
+        new_state[k] = torch.tensor(v, dtype=target.dtype).reshape(target.shape)
+    model.load_state_dict(new_state)
+
 
 # ---------------------------------------------------------------------------
 # Builder
@@ -168,24 +177,27 @@ class GPModelBuilder:
 
     # --- construction & fitting ---
 
-    def fit(
+    def construct(
         self,
         train_X: torch.Tensor,
         train_Y: torch.Tensor,
     ) -> SingleTaskGP:
-        """Construct and fit a GP on raw noisy observations.
+        """Build a GP **without** fitting its hyperparameters.
+
+        Returns a fresh model in ``eval`` mode whose kernel / mean / likelihood
+        parameters carry their default initialisation.  Intended for use by
+        ``process.py`` to rebuild a saved GP: call :func:`load_state_dict_into`
+        on the returned model to restore the trained state.
 
         Uses ``FixedNoiseGP`` when ``config.noise_std`` is set, otherwise
-        ``SingleTaskGP`` with inferred noise.
-
-        ``train_Y`` must be ``obs.y_obs``, never ``f_noiseless``.
+        ``SingleTaskGP``.
 
         Args:
             train_X: Training inputs, shape ``(n, dim)``.
-            train_Y: Noisy observations ``y_obs``, shape ``(n, 1)`` or ``(n,)``.
+            train_Y: Training targets, shape ``(n, 1)`` or ``(n,)``.
 
         Returns:
-            Fitted model in ``eval`` mode.
+            Unfitted model in ``eval`` mode.
         """
         train_X, train_Y = validate_training_data(train_X, train_Y)
 
@@ -200,7 +212,28 @@ class GPModelBuilder:
             model: SingleTaskGP = FixedNoiseGP(**kwargs)
         else:
             model = SingleTaskGP(**kwargs)
+        model.eval()
+        return model
 
+    def fit(
+        self,
+        train_X: torch.Tensor,
+        train_Y: torch.Tensor,
+    ) -> SingleTaskGP:
+        """Construct and fit a GP on noisy training observations.
+
+        ``train_Y`` must be ``obs.y_obs``, never ``f_noiseless`` (RIGHT), or
+        the method-specific transformed target (WRONG).
+
+        Args:
+            train_X: Training inputs, shape ``(n, dim)``.
+            train_Y: Training targets, shape ``(n, 1)`` or ``(n,)``.
+
+        Returns:
+            Fitted model in ``eval`` mode.
+        """
+        model = self.construct(train_X, train_Y)
+        model.train()
         mll = ExactMarginalLogLikelihood(model.likelihood, model)
         fit_gpytorch_model(mll)
         model.eval()
@@ -308,32 +341,6 @@ class GPModelBuilder:
                 for i, m in enumerate(model.models)
             }
         return self._extract_single(model)
-
-    # --- model state capture ---
-
-    def capture_state(
-        self,
-        model: SingleTaskGP | ModelListGP,
-        iteration: int,
-    ) -> ModelState:
-        """Capture a serialisable snapshot of the model at a given BO iteration.
-
-        The returned :class:`ModelState` can be appended to a list across
-        iterations and later serialised or used for posterior diagnostics.
-
-        Args:
-            model: A fitted GP model.
-            iteration: Current BO iteration index (0-based).
-
-        Returns:
-            :class:`ModelState` with learned hyperparameters and metadata.
-        """
-        return ModelState(
-            iteration=iteration,
-            model_type=type(model).__name__,
-            kernel_name=self.config.kernel,
-            hyperparameters=self.extract_hyperparameters(model),
-        )
 
     # --- private helpers ---
 
