@@ -28,6 +28,7 @@ from typing import Any, Callable, Optional
 import torch
 import yaml
 from botorch.optim import optimize_acqf
+import time
 
 # Make project root importable when run as a script.
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -291,6 +292,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[list[str]] = None) -> Path:
+    start_time = time.perf_counter()
     args = _parse_args(argv)
     config = _load_config(args.config)
 
@@ -342,6 +344,8 @@ def main(argv: Optional[list[str]] = None) -> Path:
 
     log.info("=" * 60)
     log.info("Done.")
+    elapsed = time.perf_counter() - start_time
+    log.info(f"Run completed in {elapsed:.2f} seconds ({elapsed / 60:.2f} minutes)")
     return logger.run_dir
 
 
