@@ -121,6 +121,12 @@ class ConvergenceCurves:
 # ---------------------------------------------------------------------------
 # CalibrationReport  — per-method, per-seed calibration on a held-out grid
 # ---------------------------------------------------------------------------
+@dataclasses.dataclass
+class CalibrationPredictionGrid :
+    X_test: list[list[float]]
+    y_true: list[float]
+    posterior_mean: list[float]
+    posterior_std: list[float]
 
 @dataclasses.dataclass
 class CalibrationReport:
@@ -155,13 +161,25 @@ class CalibrationReport:
     test_grid_seed:  int
     test_grid:       dict[str, float]
     near_target:     Optional[dict[str, Any]]
+    predictions: Optional[CalibrationPredictionGrid] = None
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "CalibrationReport":
-        return cls(**d)
+        raw_pred = d.get("predictions")
+        predictions = (
+            CalibrationPredictionGrid(**raw_pred) if raw_pred is not None else None
+        )
+        return cls(
+            iteration_index=d["iteration_index"],
+            n_test=d["n_test"],
+            test_grid_seed=d["test_grid_seed"],
+            test_grid=d["test_grid"],
+            near_target=d.get("near_target"),
+            predictions=predictions,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -185,14 +203,14 @@ class MethodProcessed:
     train_label:  str
     final:        FinalScalars
     convergence:  ConvergenceCurves
-    calibration:  CalibrationReport
+    calibrations:  list[CalibrationReport]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "train_label": self.train_label,
             "final":       self.final.to_dict(),
             "convergence": self.convergence.to_dict(),
-            "calibration": self.calibration.to_dict(),
+            "calibrations": [c.to_dict() for c in self.calibrations],
         }
 
     @classmethod
@@ -202,7 +220,7 @@ class MethodProcessed:
             train_label=d["train_label"],
             final=FinalScalars.from_dict(d["final"]),
             convergence=ConvergenceCurves.from_dict(d["convergence"]),
-            calibration=CalibrationReport.from_dict(d["calibration"]),
+            calibrations=[CalibrationReport.from_dict(c) for c in d["calibrations"]],
         )
 
 
