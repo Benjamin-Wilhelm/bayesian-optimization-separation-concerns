@@ -126,6 +126,7 @@ def _run_one_method(
     X_init: torch.Tensor,
     Y_obs_init: torch.Tensor,
     log,
+    device: torch.device,
 ) -> MethodTrajectory:
     """Run the BO loop for one method under the current seed."""
     if method_name not in _METHOD_SPECS:
@@ -161,7 +162,7 @@ def _run_one_method(
         acq = spec["acq_builder"](model, target, beta)
         cand, acq_val = optimize_acqf(
             acq_function=acq,
-            bounds=problem.bounds,
+            bounds=problem.bounds.to(device),
             q=1,
             num_restarts=num_restarts,
             raw_samples=raw_samples,
@@ -212,6 +213,7 @@ def _run_one_seed(
     problem: SyntheticBenchmark,
     seed: int,
     log,
+    device: torch.device,
 ) -> RawSeedData:
     """Run all configured methods under one shared initial design."""
     torch.manual_seed(seed)
@@ -220,7 +222,7 @@ def _run_one_seed(
     target    = float(config["target"])
     noise_std = float(config["noise_std"])
 
-    X_init = sobol_design(problem.bounds, n=n_initial, seed=seed)
+    X_init = sobol_design(problem.bounds, n=n_initial, seed=seed).to(device)
     obs_init = problem.observe(X_init)
 
     initial_design = InitialDesign.from_tensors(
@@ -242,6 +244,7 @@ def _run_one_seed(
             X_init=X_init,
             Y_obs_init=obs_init.y_obs,
             log=log,
+            device=device,
         )
 
     metadata = SeedMetadata(
@@ -288,14 +291,25 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=_PROJECT_ROOT / "results",
         help="Root directory under which run dirs are created.",
     )
+    parser.add_argument(
+        "--device", type=str, default=None,
+        help="Torch device for tensor computation, e.g. 'cpu', 'cuda', 'cuda:0'.",
+    )
     return parser.parse_args(argv)
+
+def resolve_device(name: str) -> torch.device:
+    """manages automatically device attribution"""
+    if name == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(name)
 
 
 def main(argv: Optional[list[str]] = None) -> Path:
     start_time = time.perf_counter()
     args = _parse_args(argv)
     config = _load_config(args.config)
-
+    device_name = args.device if args.device is not None else config.get("device", "cpu")
+    device = resolve_device(device_name)
     benchmark_name = config["benchmark"]
     if benchmark_name not in BENCHMARK_REGISTRY:
         raise ValueError(
@@ -326,6 +340,7 @@ def main(argv: Optional[list[str]] = None) -> Path:
 
     log.info("=" * 60)
     log.info(f"Run: {logger.run_id()}")
+    log.info(f"  device    = {device}")
     log.info(f"  benchmark = {problem.name}  dim={problem.dim}")
     log.info(f"  target    = {config['target']}  noise_std = {config['noise_std']}")
     log.info(f"  n_initial = {config['initial_design_size']}  budget = {config['budget']}")
@@ -334,7 +349,7 @@ def main(argv: Optional[list[str]] = None) -> Path:
     log.info("=" * 60)
 
     for seed in config["seeds"]:
-        raw_seed = _run_one_seed(config, problem, int(seed), log)
+        raw_seed = _run_one_seed(config, problem, int(seed), log, device)
         seed_path = logger.save_seed_result(
             benchmark=problem.name,
             seed=int(seed),
