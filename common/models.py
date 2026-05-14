@@ -212,6 +212,7 @@ class GPModelBuilder:
             model: SingleTaskGP = FixedNoiseGP(**kwargs)
         else:
             model = SingleTaskGP(**kwargs)
+        model.to(train_X.device)
         model.eval()
         return model
 
