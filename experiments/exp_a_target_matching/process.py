@@ -80,6 +80,7 @@ def _reconstruct_X_Y(
     trajectory_prefix: list,
     train_label: str,
     target: float,
+    device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Rebuild ``(train_X, train_Y)`` as seen at the start of one iteration.
 
@@ -89,20 +90,21 @@ def _reconstruct_X_Y(
             interest (so iteration ``t`` uses ``trajectory[:t-1]``).
         train_label: ``"y_obs"`` (RIGHT) or ``"abs(y_obs - target)"`` (WRONG).
         target: Target value ``T`` — used by the WRONG transform.
+        device: Torch device for the returned tensors.
 
     Returns:
         ``(train_X, train_Y)`` as ``torch.double`` tensors with shapes
         ``(n, dim)`` and ``(n, 1)``.
     """
-    X = torch.tensor(initial_design.X, dtype=torch.double)
-    y_obs = torch.tensor(initial_design.y_obs, dtype=torch.double).unsqueeze(-1)
+    X = torch.tensor(initial_design.X, dtype=torch.double, device=device)
+    y_obs = torch.tensor(initial_design.y_obs, dtype=torch.double, device=device).unsqueeze(-1)
 
     if trajectory_prefix:
         X_cand = torch.tensor(
-            [step.x for step in trajectory_prefix], dtype=torch.double
+            [step.x for step in trajectory_prefix], dtype=torch.double, device=device
         )
         y_cand = torch.tensor(
-            [step.y_obs for step in trajectory_prefix], dtype=torch.double
+            [step.y_obs for step in trajectory_prefix], dtype=torch.double, device=device
         ).unsqueeze(-1)
         X = torch.cat([X, X_cand], dim=0)
         y_obs = torch.cat([y_obs, y_cand], dim=0)
@@ -249,7 +251,8 @@ def _calibration_reports(
     target: float,
     test_grid_seed: int,
     near_target_epsilon: Optional[float],
-    every: int = 5
+    device: torch.device,
+    every: int = 5,
 ) -> list[CalibrationReport]:
     """Held-out calibration at the snapshot from the final BO iteration.
 
@@ -272,6 +275,7 @@ def _calibration_reports(
             trajectory_prefix=prefix,
             train_label=method.train_label,
             target=target,
+            device=device,
         )
         
         model = _rebuild_gp_at_snapshot(snapshot, train_X, train_Y)
@@ -326,6 +330,7 @@ def _calibration_reports(
 def _process_one_seed(
     raw: RawSeedData,
     config: dict[str, Any],
+    device: torch.device,
 ) -> ProcessedSeedData:
     benchmark_name = raw.metadata.benchmark
     if benchmark_name not in BENCHMARK_REGISTRY:
@@ -341,7 +346,7 @@ def _process_one_seed(
     test_grid_seed = int(test_grid_cfg.get("seed", 0))
 
     # Held-out grid is deterministic from (benchmark, n_test, seed).
-    X_test = problem.test_set(n=n_test, seed=test_grid_seed)
+    X_test = problem.test_set(n=n_test, seed=test_grid_seed).to(device)
     f_test = problem.f(X_test)
 
     # Oracle.  Synthetic benchmarks can override; default returns None,
@@ -373,6 +378,7 @@ def _process_one_seed(
                 float(near_target_epsilon) if near_target_epsilon is not None
                 else None
             ),
+            device=device,
             every=int(test_grid_cfg.get("calibration_every", 5)),
         )
         methods[name] = MethodProcessed(
@@ -429,8 +435,15 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         help="Filter (repeatable).  Defaults to all benchmarks.")
     parser.add_argument("--seed", action="append", type=int, default=None,
                         help="Filter (repeatable).  Defaults to all seeds.")
+    parser.add_argument("--device", type=str, default="cpu",
+                        help="Torch device for GP reconstruction, e.g. 'cpu', 'cuda'.")
     return parser.parse_args(argv)
 
+def resolve_device(name: str) -> torch.device:
+    "manages automatically device attribution"
+    if name == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(name)
 
 def main(argv: Optional[list[str]] = None) -> None:
     logging.basicConfig(
@@ -439,6 +452,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     args = _parse_args(argv)
+    device_name = args.device or config.get("device", "cpu")
+    device = resolve_device(device_name)
 
     run_dir: Path = args.run_dir.resolve()
     config_path = run_dir / "config.json"
@@ -457,7 +472,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     logger.info(f"Processing {len(seed_files)} raw seed file(s) under {run_dir}")
     for benchmark, seed, raw_path in seed_files:
         raw = RawSeedData.from_dict(load_json(raw_path))
-        processed = _process_one_seed(raw, config)
+        processed = _process_one_seed(raw, config, device)
         out_path = run_logger.processed_per_seed_path(benchmark, seed)
         save_json(processed.to_dict(), out_path)
         logger.info(f"  [{benchmark}] seed {seed:>3} -> {out_path.relative_to(run_dir)}")
