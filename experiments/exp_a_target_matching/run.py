@@ -94,7 +94,7 @@ _METHOD_SPECS: dict[str, dict[str, Any]] = {
         "acq_builder": _build_wrong_acq,
         # Noise on |y_obs - T| is folded near the target and is not simply
         # Gaussian; let the GP infer it.
-        "use_fixed_noise": False,
+        "use_fixed_noise": True,
     },
 }
 
@@ -171,7 +171,7 @@ def _run_one_method(
         # Posterior at the candidate BEFORE adding it to the training set.
         mean, var = builder.predict(model, cand)
         post_mean = float(mean.squeeze().item())
-        post_std  = float(var.clamp_min(1e-10).sqrt().squeeze().item())
+        post_std  = float(var.clamp_min(1e-12).sqrt().squeeze().item())
 
         # Observe the raw problem — NEVER the transformed quantity.
         obs = problem.observe(cand)
