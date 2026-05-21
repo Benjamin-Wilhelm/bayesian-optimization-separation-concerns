@@ -161,7 +161,7 @@ def suggest_next_point(
 
 def clamp_variance(
     variance: torch.Tensor,
-    min_variance: float = 1e-6,
+    min_variance: float = 1e-12,
     ) -> torch.Tensor:
     """Clamp predictive variance to a positive lower bound.
 
