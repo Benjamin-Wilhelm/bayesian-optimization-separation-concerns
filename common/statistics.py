@@ -193,6 +193,79 @@ def mann_whitney_comparison(
     return result
 
 
+def wilcoxon_paired_comparison(
+    right_values: ArrayLike,
+    wrong_values: ArrayLike,
+    alternative: str = "greater",
+) -> dict:
+    r"""Paired Wilcoxon signed-rank test on differences ``wrong - right``.
+
+    For loss-type metrics (smaller is better), RIGHT being preferable means
+    ``Delta_i = wrong_i - right_i > 0`` on average, which is the default
+    ``alternative="greater"``.  The test assumes RIGHT and WRONG share the
+    *same seed and initial design* (paired by index).
+
+    Requires scipy.  Returns ``NaN`` statistics with ``scipy_available=False``
+    when scipy is missing.
+
+    Args:
+        right_values: Per-seed metric for RIGHT, shape ``(n,)``.
+        wrong_values: Per-seed metric for WRONG, shape ``(n,)``.  Must align
+            seed-for-seed with ``right_values``.
+        alternative: ``"greater"`` (default, ``H_1: median(diff) > 0``,
+            i.e. RIGHT better), ``"less"``, or ``"two-sided"``.
+
+    Returns:
+        Dictionary with keys:
+
+        - ``test``: ``"wilcoxon_signed_rank"``
+        - ``alternative``: forwarded string
+        - ``n``: paired sample size (``int``)
+        - ``statistic``: signed-rank statistic (``float``; ``NaN`` if scipy
+          missing or all differences are zero)
+        - ``p_value``: ``float``
+        - ``median_difference_wrong_minus_right``: ``float``
+        - ``mean_difference_wrong_minus_right``: ``float``
+        - ``scipy_available``: ``bool``
+    """
+    r = _to_numpy_1d(right_values, "right_values")
+    w = _to_numpy_1d(wrong_values, "wrong_values")
+    if r.shape != w.shape:
+        raise ValueError(
+            f"right_values and wrong_values must have the same shape for a "
+            f"paired test; got {r.shape} vs {w.shape}."
+        )
+    diff = w - r
+    n = int(len(diff))
+    result: dict = {
+        "test": "wilcoxon_signed_rank",
+        "alternative": alternative,
+        "n": n,
+        "median_difference_wrong_minus_right": (
+            float(np.median(diff)) if n > 0 else float("nan")
+        ),
+        "mean_difference_wrong_minus_right": (
+            float(np.mean(diff)) if n > 0 else float("nan")
+        ),
+        "scipy_available": _SCIPY_AVAILABLE,
+    }
+    if not _SCIPY_AVAILABLE or n == 0:
+        result["statistic"] = float("nan")
+        result["p_value"] = float("nan")
+        return result
+    import scipy.stats
+    try:
+        res = scipy.stats.wilcoxon(diff, alternative=alternative)
+        result["statistic"] = float(res.statistic)
+        result["p_value"] = float(res.pvalue)
+    except ValueError as exc:
+        # scipy raises when all diffs are zero — treat as no evidence.
+        result["statistic"] = float("nan")
+        result["p_value"] = float("nan")
+        result["error"] = str(exc)
+    return result
+
+
 def rank_biserial_correlation(
     right_values: ArrayLike,
     wrong_values: ArrayLike,
@@ -332,6 +405,76 @@ def bootstrap_ci_curves(
     return {"center": center, "lower": lower, "upper": upper}
 
 
+def bootstrap_uniform_band(
+    curves: ArrayLike,
+    n_bootstrap: int = 10_000,
+    confidence: float = 0.95,
+    seed: Optional[int] = 0,
+) -> dict:
+    r"""Simultaneous (uniform) bootstrap confidence band over a curve.
+
+    Given an array of shape ``(n_seeds, n_steps)``, the band is constructed
+    by resampling rows (seeds) with replacement and tracking the running
+    maximum standardised deviation:
+
+    .. math::
+
+        Q^{(b)} = \max_t \;
+          \left| \frac{\bar{c}^{(b)}_t - \bar{c}_t}{\widehat{\mathrm{SE}}_t}
+                 \right|
+
+    where :math:`\bar{c}_t` is the mean curve and
+    :math:`\widehat{\mathrm{SE}}_t` is the bootstrap-estimated pointwise
+    standard error.  The ``confidence``-quantile of :math:`Q^{(b)}` gives
+    the band half-width.
+
+    Args:
+        curves: Array of shape ``(n_seeds, n_steps)``.
+        n_bootstrap: Number of bootstrap resamples.
+        confidence: Nominal simultaneous coverage, e.g. ``0.95``.
+        seed: Optional integer seed for reproducibility.
+
+    Returns:
+        Dictionary with keys (numpy arrays converted to lists for callers
+        that need JSON output):
+
+        - ``mean``: mean curve, shape ``(n_steps,)``
+        - ``lower``: ``mean - q * se``, shape ``(n_steps,)``
+        - ``upper``: ``mean + q * se``, shape ``(n_steps,)``
+        - ``confidence``: ``float``
+        - ``q``: scalar quantile multiplier
+        - ``n_bootstrap``: ``int``
+        - ``seed``: ``Optional[int]``
+        - ``band_type``: ``"uniform"``
+
+        The numerical fields ``mean``, ``lower``, ``upper`` are
+        ``numpy.ndarray``; call ``.tolist()`` before JSON serialisation.
+    """
+    arr = _to_numpy_2d(curves, "curves")
+    n_runs, n_steps = arr.shape
+    rng = np.random.default_rng(seed)
+
+    mean_curve = arr.mean(axis=0)  # (n_steps,)
+    idx = rng.integers(0, n_runs, size=(n_bootstrap, n_runs))
+    boot = arr[idx].mean(axis=1)   # (n_bootstrap, n_steps)
+    se = boot.std(axis=0, ddof=1)
+    se = np.where(se > 0, se, 1.0)  # avoid 0/0 for degenerate columns
+
+    max_stat = np.max(np.abs((boot - mean_curve[None, :]) / se[None, :]), axis=1)
+    q = float(np.quantile(max_stat, confidence))
+
+    return {
+        "mean":   mean_curve,
+        "lower":  mean_curve - q * se,
+        "upper":  mean_curve + q * se,
+        "confidence":  float(confidence),
+        "q":           q,
+        "n_bootstrap": int(n_bootstrap),
+        "seed":        None if seed is None else int(seed),
+        "band_type":   "uniform",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Aggregate comparison utilities
 # ---------------------------------------------------------------------------
@@ -381,28 +524,83 @@ def aggregate_convergence_curves(
     statistic: str = "median",
     confidence: float = 0.95,
     n_bootstrap: int = 10_000,
+    band_type: str = "pointwise",
+    random_state: Optional[int] = 0,
 ) -> dict[str, dict]:
     """Compute bootstrap CI curves for multiple methods simultaneously.
+
+    ``band_type`` controls which kind of band is returned:
+
+    - ``"pointwise"``: per-time-step quantile band from
+      :func:`bootstrap_ci_curves`.  Each method returns
+      ``{"center", "lower", "upper", "band_type": "pointwise"}``.
+    - ``"uniform"``: simultaneous (Kolmogorov-style) mean-curve band from
+      :func:`bootstrap_uniform_band`.  Each method returns
+      ``{"center", "lower", "upper", "q", "band_type": "uniform"}``.
+    - ``"both"``: emits both bands.  Each method returns
+      ``{"pointwise": {...}, "uniform": {...}}``.
 
     Args:
         method_to_curves: Mapping from method name to an array of shape
             ``(n_runs, n_steps)``.  All arrays must have the same ``n_steps``.
-        statistic: ``"mean"`` or ``"median"``.
+        statistic: ``"mean"`` or ``"median"`` for the pointwise band.  The
+            uniform band always uses the mean.
         confidence: CI level.
         n_bootstrap: Number of bootstrap resamples.
+        band_type: ``"pointwise"`` | ``"uniform"`` | ``"both"``.
+        random_state: Optional integer seed for both bootstraps.
 
     Returns:
-        Mapping from method name to ``{"center", "lower", "upper"}``.
-        Each value is a ``numpy.ndarray`` of shape ``(n_steps,)``; call
-        ``.tolist()`` before JSON serialisation.
+        Mapping from method name to either a single band dict or to
+        ``{"pointwise", "uniform"}`` depending on ``band_type``.  Arrays
+        are ``numpy.ndarray`` (call ``.tolist()`` before JSON serialisation).
     """
-    return {
-        name: bootstrap_ci_curves(
-            curves,
-            statistic=statistic,
-            confidence=confidence,
-            n_bootstrap=n_bootstrap,
+    if band_type not in ("pointwise", "uniform", "both"):
+        raise ValueError(
+            f"band_type must be 'pointwise', 'uniform' or 'both', got '{band_type}'"
         )
-        for name, curves in method_to_curves.items()
-    }
+
+    out: dict[str, dict] = {}
+    for name, curves in method_to_curves.items():
+        pw = None
+        uf = None
+        if band_type in ("pointwise", "both"):
+            pw_raw = bootstrap_ci_curves(
+                curves,
+                statistic=statistic,
+                confidence=confidence,
+                n_bootstrap=n_bootstrap,
+                random_state=random_state,
+            )
+            pw = {
+                "center":     pw_raw["center"],
+                "lower":      pw_raw["lower"],
+                "upper":      pw_raw["upper"],
+                "band_type":  "pointwise",
+                "statistic":  statistic,
+                "confidence": float(confidence),
+            }
+        if band_type in ("uniform", "both"):
+            uf_raw = bootstrap_uniform_band(
+                curves,
+                n_bootstrap=n_bootstrap,
+                confidence=confidence,
+                seed=random_state,
+            )
+            uf = {
+                "center":     uf_raw["mean"],
+                "lower":      uf_raw["lower"],
+                "upper":      uf_raw["upper"],
+                "band_type":  "uniform",
+                "statistic":  "mean",
+                "confidence": float(confidence),
+                "q":          uf_raw["q"],
+            }
+        if band_type == "pointwise":
+            out[name] = pw  # type: ignore[assignment]
+        elif band_type == "uniform":
+            out[name] = uf  # type: ignore[assignment]
+        else:
+            out[name] = {"pointwise": pw, "uniform": uf}
+    return out
 

@@ -344,6 +344,102 @@ def calibration_summary(
 
 
 # ---------------------------------------------------------------------------
+# Joint Gaussian NLPD on a small subgrid
+# ---------------------------------------------------------------------------
+
+def joint_gaussian_nlpd(
+    y_true: ArrayLike,
+    mean: ArrayLike,
+    covariance: ArrayLike,
+    jitter: float = 1e-6,
+) -> dict:
+    r"""Negative log predictive density under a joint multivariate Gaussian.
+
+    .. math::
+
+        \mathrm{NLPD}_\mathrm{joint} =
+        \frac{1}{2m}\left[
+            (y - \mu)^\top K^{-1} (y - \mu)
+            + \log\det K
+            + m \log(2\pi)
+        \right]
+
+    Uses a Cholesky factorisation with a configurable jitter on the diagonal
+    for numerical stability.  No matrix inverse is formed explicitly.
+
+    Args:
+        y_true: Observed values, shape ``(m,)``.
+        mean: Predictive means, shape ``(m,)``.
+        covariance: Joint posterior covariance matrix, shape ``(m, m)``.
+        jitter: Additive diagonal jitter for stability; e.g. ``1e-6``.
+
+    Returns:
+        Dictionary with keys (all JSON-serialisable):
+
+        - ``m_test``: int — number of test points.
+        - ``nlpd_joint``: float — averaged joint NLPD.
+        - ``mahalanobis_sq``: float — :math:`(y - \mu)^\top K^{-1} (y - \mu)`.
+        - ``logdet``: float — :math:`\log\det K`.
+        - ``jitter``: float — jitter actually used.
+
+        On numerical failure, returns ``{"error": <str>, "jitter": jitter,
+        "m_test": m, ...}`` instead of raising.
+    """
+    y = _to_numpy_1d(y_true, "y_true")
+    mu = _to_numpy_1d(mean, "mean")
+    cov = np.asarray(covariance, dtype=np.float64)
+    if cov.ndim != 2 or cov.shape[0] != cov.shape[1]:
+        return {
+            "m_test": int(len(y)),
+            "jitter": float(jitter),
+            "nlpd_joint": float("nan"),
+            "mahalanobis_sq": float("nan"),
+            "logdet": float("nan"),
+            "error": f"covariance must be square 2-D, got shape {cov.shape}",
+        }
+    m = len(y)
+    if cov.shape[0] != m or len(mu) != m:
+        return {
+            "m_test": m,
+            "jitter": float(jitter),
+            "nlpd_joint": float("nan"),
+            "mahalanobis_sq": float("nan"),
+            "logdet": float("nan"),
+            "error": (
+                f"shape mismatch: y_true ({m}), mean ({len(mu)}), "
+                f"covariance ({cov.shape})"
+            ),
+        }
+
+    K = 0.5 * (cov + cov.T)  # enforce symmetry
+    K = K + float(jitter) * np.eye(m)
+    try:
+        L = np.linalg.cholesky(K)
+    except np.linalg.LinAlgError as e:
+        return {
+            "m_test": m,
+            "jitter": float(jitter),
+            "nlpd_joint": float("nan"),
+            "mahalanobis_sq": float("nan"),
+            "logdet": float("nan"),
+            "error": f"Cholesky failed: {e}",
+        }
+
+    diff = y - mu
+    alpha = np.linalg.solve(L, diff)
+    mahalanobis_sq = float(np.dot(alpha, alpha))
+    logdet = float(2.0 * np.sum(np.log(np.diag(L))))
+    nlpd_joint = (mahalanobis_sq + logdet + m * math.log(2.0 * math.pi)) / (2.0 * m)
+    return {
+        "m_test": m,
+        "jitter": float(jitter),
+        "nlpd_joint": float(nlpd_joint),
+        "mahalanobis_sq": mahalanobis_sq,
+        "logdet": logdet,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Near-target diagnostics
 # ---------------------------------------------------------------------------
 
