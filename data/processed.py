@@ -13,7 +13,7 @@ Canonical JSON structure::
       "epsilon":           float | null,
       "failure_threshold": float | null,
       "oracle_best":       float,
-      "test_grid":         {"n_test": int, "seed": int},
+      "test_grid":         {TestGrid fields},
       "methods": {
         "<method_name>": {
           "train_label": ...,
@@ -122,11 +122,69 @@ class ConvergenceCurves:
 # CalibrationReport  — per-method, per-seed calibration on a held-out grid
 # ---------------------------------------------------------------------------
 @dataclasses.dataclass
-class CalibrationPredictionGrid :
-    X_test: list[list[float]]
-    y_true: list[float]
+class TestGrid:
+    """Metadata describing held-out test grids used for calibration.
+
+    This class intentionally does not store X_test, f_test, or y_true.
+    The grids are reconstructed deterministically from the benchmark and
+    the parameters stored here.
+
+    Attributes:
+        n_test: Number of points in the global held-out test grid.
+        seed: Sobol seed used to generate the global test grid.
+
+        near_target_epsilon: Threshold defining the near-target region
+            |f(x) - T| <= near_target_epsilon. None if not used.
+
+        near_target_mode: How the near-target calibration set is built.
+            - "mask_on_global_grid": near-target points are obtained by
+              filtering the global test grid.
+            - "separate_filtered_sobol_pool": near-target points are built
+              from a separate Sobol pool and then filtered.
+
+        n_test_near_target: Desired or actual number of near-target test
+            points, depending on the construction mode. None if not used.
+
+        near_target_seed: Sobol seed for a separate near-target pool.
+            None when near_target_mode == "mask_on_global_grid".
+
+        near_target_pool_size: Size of the Sobol pool used before filtering
+            for near-target points. None unless using a separate filtered pool.
+
+        m_test_joint_distrib: Optional number of test points used when
+            evaluating joint Gaussian posterior quantities.
+    """
+
+    n_test: int
+    seed: int
+
+    near_target_epsilon: Optional[float] = None
+    near_target_mode: Optional[str] = None
+    n_test_near_target: Optional[int] = None
+    near_target_seed: Optional[int] = None
+    near_target_pool_size: Optional[int] = None
+
+    m_test_joint_distrib: Optional[int] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "TestGrid":
+        return cls(**d)
+
+    
+@dataclasses.dataclass
+class CalibrationPredictionGrid:
     posterior_mean: list[float]
     posterior_std: list[float]
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "CalibrationPredictionGrid":
+        return cls(**d)
 
 @dataclasses.dataclass
 class CalibrationReport:
@@ -141,43 +199,71 @@ class CalibrationReport:
     ``|f(X_test) - T|``.  ``process.py`` picks the right one based on
     ``MethodTrajectory.train_label``.
 
+    Test-grid metadata (n_test, seed, near-target config, etc.) is stored
+    once per seed in :class:`ProcessedSeedData.test_grid` and is therefore
+    not duplicated here.
+
     Attributes:
         iteration_index: BO iteration at which the GP was snapshotted
             (usually the final iteration, but other indices may be added).
-        n_test: Number of held-out test points.
-        test_grid_seed: Sobol seed used for the test grid.
-        test_grid: Output of :func:`common.diagnostics.calibration_summary`
-            over all test points (NLPD, coverage, residual stats, PIT,
-            violation rate).
+        global_calibration: Output of
+            :func:`common.diagnostics.calibration_summary` over all test
+            points (NLPD, coverage, residual stats, PIT, violation rate).
         near_target: Output of
             :func:`common.diagnostics.near_target_calibration_summary` —
             calibration restricted to test points with
             ``|f - T| <= epsilon_near``.  ``None`` when ``epsilon_near`` is
             not configured.
+        joint_posterior: Optional diagnostics on the joint Gaussian
+            posterior over an ``m_test_joint_distrib``-sized subset.
+            ``None`` when not computed.
+        predictions: Optional :class:`CalibrationPredictionGrid` storing
+            posterior mean/std on the global test grid. ``None`` when not
+            requested.
     """
 
     iteration_index: int
-    n_test:          int
-    test_grid_seed:  int
-    test_grid:       dict[str, float]
-    near_target:     Optional[dict[str, Any]]
+    global_calibration: dict[str, Any]
+    near_target: Optional[dict[str, Any]]
+    joint_posterior: Optional[dict[str, Any]] = None
     predictions: Optional[CalibrationPredictionGrid] = None
 
     def to_dict(self) -> dict[str, Any]:
-        return dataclasses.asdict(self)
+        return {
+            "iteration_index": self.iteration_index,
+            "global_calibration": self.global_calibration,
+            "near_target": self.near_target,
+            "joint_posterior": self.joint_posterior,
+            "predictions": (
+                self.predictions.to_dict()
+                if self.predictions is not None
+                else None
+            ),
+        }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "CalibrationReport":
         raw_pred = d.get("predictions")
         predictions = (
-            CalibrationPredictionGrid(**raw_pred) if raw_pred is not None else None
+            CalibrationPredictionGrid.from_dict(raw_pred)
+            if raw_pred is not None
+            else None
         )
+
+        # Backward compat: legacy files stored the global-grid summary under
+        # the key "test_grid" instead of "global_calibration".
+        global_calibration = d.get("global_calibration", d.get("test_grid"))
+        if global_calibration is None:
+            raise KeyError(
+                "CalibrationReport JSON has neither 'global_calibration' "
+                "nor legacy 'test_grid' key."
+            )
+
         return cls(
             iteration_index=d["iteration_index"],
-            n_test=d["n_test"],
-            test_grid_seed=d["test_grid_seed"],
-            test_grid=d["test_grid"],
+            global_calibration=global_calibration,
             near_target=d.get("near_target"),
+            joint_posterior=d.get("joint_posterior"),
             predictions=predictions,
         )
 
@@ -243,7 +329,8 @@ class ProcessedSeedData:
         failure_threshold: Failure criterion, or ``None`` if not configured.
         oracle_best: ``min_x |f(x) - T|``.  Zero if the target is attainable;
             otherwise the benchmark's analytic value, when known.
-        test_grid: Grid configuration ``{"n_test": int, "seed": int}``.
+        test_grid: :class:`TestGrid` describing the held-out test grid(s)
+            used by all per-method calibration reports under this seed.
         methods: Per-method processed data, keyed by method name.
     """
 
@@ -252,7 +339,7 @@ class ProcessedSeedData:
     epsilon:           Optional[float]
     failure_threshold: Optional[float]
     oracle_best:       float
-    test_grid:         dict[str, int]
+    test_grid:         TestGrid
     methods:           dict[str, MethodProcessed]
 
     def to_dict(self) -> dict[str, Any]:
@@ -262,7 +349,7 @@ class ProcessedSeedData:
             "epsilon":           self.epsilon,
             "failure_threshold": self.failure_threshold,
             "oracle_best":       self.oracle_best,
-            "test_grid":         self.test_grid,
+            "test_grid":         self.test_grid.to_dict(),
             "methods":           {n: m.to_dict() for n, m in self.methods.items()},
         }
 
@@ -274,7 +361,7 @@ class ProcessedSeedData:
             epsilon=d.get("epsilon"),
             failure_threshold=d.get("failure_threshold"),
             oracle_best=d["oracle_best"],
-            test_grid=d["test_grid"],
+            test_grid=TestGrid.from_dict(d["test_grid"]),
             methods={
                 name: MethodProcessed.from_dict(name, md)
                 for name, md in d.get("methods", {}).items()
