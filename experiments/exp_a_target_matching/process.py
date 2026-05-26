@@ -38,7 +38,11 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from benchmarks import BENCHMARK_REGISTRY, SyntheticBenchmark
-from common.diagnostics import calibration_summary, near_target_calibration_summary
+from common.diagnostics import (
+    calibration_summary,
+    joint_gaussian_nlpd,
+    near_target_calibration_summary,
+)
 from common.logging import RunLogger
 from common.metrics import (
     area_under_curve,
@@ -60,6 +64,7 @@ from data.processed import (
     CalibrationPredictionGrid,
     MethodProcessed,
     ProcessedSeedData,
+    TestGrid,
 )
 from data.raw import (
     InitialDesign,
@@ -249,26 +254,45 @@ def _calibration_reports(
     X_test: torch.Tensor,
     f_test: torch.Tensor,
     target: float,
-    test_grid_seed: int,
     near_target_epsilon: Optional[float],
     device: torch.device,
     every: int = 5,
+    compute_global: bool = True,
+    compute_near_target: bool = True,
+    compute_joint: bool = False,
+    store_predictions: bool = True,
+    m_test_joint_distrib: Optional[int] = None,
+    joint_nlpd_jitter: float = 1e-6,
 ) -> list[CalibrationReport]:
-    """Held-out calibration at the snapshot from the final BO iteration.
+    """Held-out calibration at selected GP snapshots.
 
-    Rebuilds the trained GP via :func:`load_state_dict_into`, evaluates the
-    posterior on the test grid, and computes calibration diagnostics against
-    the appropriate ground truth (``f`` for RIGHT, ``|f - T|`` for WRONG).
+    Rebuilds the trained GP via load_state_dict, evaluates the posterior on
+    the test grid, and computes calibration diagnostics against the appropriate
+    ground truth: f for RIGHT, |f - T| for WRONG.
+
+    When ``compute_joint`` is True and ``m_test_joint_distrib`` is a positive
+    integer, an additional joint Gaussian NLPD is computed on the first
+    ``m_test_joint_distrib`` points of ``X_test``.  Only scalars are stored
+    (never the covariance itself); see :func:`joint_gaussian_nlpd`.
     """
     reports = []
     if not method.model_snapshots:
         raise ValueError(f"No model snapshots for method '{method.method_name}'.")
 
-    for snapshot in method.model_snapshots :
+    do_joint = (
+        compute_joint
+        and m_test_joint_distrib is not None
+        and int(m_test_joint_distrib) > 0
+    )
+    if do_joint:
+        m_joint = min(int(m_test_joint_distrib), int(X_test.shape[0]))
+        X_joint = X_test[:m_joint]
+        f_joint = f_test.squeeze(-1)[:m_joint]
+
+    for snapshot in method.model_snapshots:
         if snapshot.iteration % every != 0 and snapshot != method.model_snapshots[-1]:
             continue
 
-        # Trajectory prefix = everything strictly BEFORE this snapshot's iteration.
         prefix = method.trajectory[: snapshot.iteration - 1]
         train_X, train_Y = _reconstruct_X_Y(
             initial_design=initial_design,
@@ -277,7 +301,7 @@ def _calibration_reports(
             target=target,
             device=device,
         )
-        
+
         model = _rebuild_gp_at_snapshot(snapshot, train_X, train_Y)
 
         with torch.no_grad():
@@ -286,17 +310,18 @@ def _calibration_reports(
             var = posterior.variance.clamp_min(1e-12).squeeze(-1)
             std = var.sqrt()
 
-        y_true = _y_true_for_method(method.train_label, f_test.squeeze(-1), target)
+        y_true_full = _y_true_for_method(method.train_label, f_test.squeeze(-1), target)
 
-        grid_summary = calibration_summary(
-            y_true=y_true.cpu().numpy(),
-            mean=mean.cpu().numpy(),
-            std=std.cpu().numpy(),
-        )
+        grid_summary: dict[str, Any] = {}
+        if compute_global:
+            grid_summary = calibration_summary(
+                y_true=y_true_full.cpu().numpy(),
+                mean=mean.cpu().numpy(),
+                std=std.cpu().numpy(),
+            )
+
         near_target_summary: Optional[dict[str, Any]] = None
-        if near_target_epsilon is not None:
-            # Near-target is always defined w.r.t. raw f and the target T,
-            # regardless of what the GP modelled.
+        if compute_near_target and near_target_epsilon is not None:
             near_target_summary = near_target_calibration_summary(
                 f_true=f_test.squeeze(-1).cpu().numpy(),
                 mean=mean.cpu().numpy(),
@@ -304,22 +329,52 @@ def _calibration_reports(
                 target=target,
                 epsilon=near_target_epsilon,
             )
-        predictions = CalibrationPredictionGrid(
-        X_test=X_test.detach().cpu().tolist(),
-        y_true=y_true.detach().cpu().tolist(),
-        posterior_mean=mean.detach().cpu().tolist(),
-        posterior_std=std.detach().cpu().tolist(),
+
+        joint_post: Optional[dict[str, Any]] = None
+        if do_joint:
+            try:
+                with torch.no_grad():
+                    joint_posterior = model.posterior(X_joint)
+                    joint_mean = joint_posterior.mean.squeeze(-1)
+                    joint_cov = joint_posterior.mvn.covariance_matrix
+                y_joint = _y_true_for_method(method.train_label, f_joint, target)
+                joint_post = joint_gaussian_nlpd(
+                    y_true=y_joint.cpu().numpy(),
+                    mean=joint_mean.cpu().numpy(),
+                    covariance=joint_cov.cpu().numpy(),
+                    jitter=float(joint_nlpd_jitter),
+                )
+            except Exception as exc:  # pragma: no cover — diagnostic resilience
+                logger.warning(
+                    "Joint NLPD failed at iter %d for method '%s': %s",
+                    snapshot.iteration, method.method_name, exc,
+                )
+                joint_post = {
+                    "m_test": int(X_joint.shape[0]),
+                    "jitter": float(joint_nlpd_jitter),
+                    "nlpd_joint": float("nan"),
+                    "mahalanobis_sq": float("nan"),
+                    "logdet": float("nan"),
+                    "error": str(exc),
+                }
+
+        predictions: Optional[CalibrationPredictionGrid] = None
+        if store_predictions:
+            predictions = CalibrationPredictionGrid(
+                posterior_mean=mean.detach().cpu().tolist(),
+                posterior_std=std.detach().cpu().tolist(),
+            )
+
+        reports.append(
+            CalibrationReport(
+                iteration_index=snapshot.iteration,
+                global_calibration=grid_summary,
+                near_target=near_target_summary,
+                joint_posterior=joint_post,
+                predictions=predictions,
+            )
         )
 
-        reports.append(CalibrationReport(
-                        iteration_index=snapshot.iteration,
-                        n_test=int(X_test.shape[0]),
-                        test_grid_seed=test_grid_seed,
-                        test_grid=grid_summary,
-                        near_target=near_target_summary,
-                        predictions=predictions,
-                        )
-        )
     return reports
 
 
@@ -342,9 +397,39 @@ def _process_one_seed(
     failure_threshold = config.get("failure_threshold")
     near_target_epsilon = config.get("near_target_epsilon")
     test_grid_cfg = config.get("test_grid", {})
+    calibration_cfg = config.get("calibration", {})
     n_test = int(test_grid_cfg.get("n_test", 256))
     test_grid_seed = int(test_grid_cfg.get("seed", 0))
 
+    m_joint_raw = test_grid_cfg.get("m_test_joint_distrib")
+    m_test_joint_distrib = (
+        int(m_joint_raw) if m_joint_raw is not None else None
+    )
+    joint_nlpd_jitter = float(test_grid_cfg.get("joint_nlpd_jitter", 1e-6))
+
+    compute_global = bool(calibration_cfg.get("compute_global", True))
+    compute_near_target = bool(calibration_cfg.get("compute_near_target", True))
+    compute_joint = bool(calibration_cfg.get("compute_joint", False))
+    store_predictions = bool(calibration_cfg.get("store_predictions", True))
+
+    test_grid = TestGrid(
+        n_test=n_test,
+        seed=test_grid_seed,
+        near_target_epsilon=(
+            float(near_target_epsilon)
+            if near_target_epsilon is not None
+            else None
+        ),
+        near_target_mode=(
+            "mask_on_global_grid"
+            if near_target_epsilon is not None
+            else None
+        ),
+        n_test_near_target=None,
+        near_target_seed=None,
+        near_target_pool_size=None,
+        m_test_joint_distrib=m_test_joint_distrib,
+    )
     # Held-out grid is deterministic from (benchmark, n_test, seed).
     X_test = problem.test_set(n=n_test, seed=test_grid_seed).to(device)
     f_test = problem.f(X_test)
@@ -373,13 +458,18 @@ def _process_one_seed(
             X_test=X_test,
             f_test=f_test,
             target=target,
-            test_grid_seed=test_grid_seed,
             near_target_epsilon=(
                 float(near_target_epsilon) if near_target_epsilon is not None
                 else None
             ),
             device=device,
             every=int(test_grid_cfg.get("calibration_every", 5)),
+            compute_global=compute_global,
+            compute_near_target=compute_near_target,
+            compute_joint=compute_joint,
+            store_predictions=store_predictions,
+            m_test_joint_distrib=m_test_joint_distrib,
+            joint_nlpd_jitter=joint_nlpd_jitter,
         )
         methods[name] = MethodProcessed(
             method_name=name,
@@ -397,7 +487,7 @@ def _process_one_seed(
             float(failure_threshold) if failure_threshold is not None else None
         ),
         oracle_best=oracle_best,
-        test_grid={"n_test": n_test, "seed": test_grid_seed},
+        test_grid=test_grid,
         methods=methods,
     )
 
@@ -435,8 +525,9 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                         help="Filter (repeatable).  Defaults to all benchmarks.")
     parser.add_argument("--seed", action="append", type=int, default=None,
                         help="Filter (repeatable).  Defaults to all seeds.")
-    parser.add_argument("--device", type=str, default="cpu",
-                        help="Torch device for GP reconstruction, e.g. 'cpu', 'cuda'.")
+    parser.add_argument("--device", type=str, default=None,
+                        help="Torch device for GP reconstruction, e.g. 'cpu', 'cuda'. "
+                             "Falls back to config['device'] or 'cpu'.")
     return parser.parse_args(argv)
 
 def resolve_device(name: str) -> torch.device:
@@ -452,8 +543,6 @@ def main(argv: Optional[list[str]] = None) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     args = _parse_args(argv)
-    device_name = args.device or config.get("device", "cpu")
-    device = resolve_device(device_name)
 
     run_dir: Path = args.run_dir.resolve()
     config_path = run_dir / "config.json"
@@ -462,6 +551,10 @@ def main(argv: Optional[list[str]] = None) -> None:
             f"Expected {config_path}; was the run produced by the new run.py?"
         )
     config = load_json(config_path)
+
+    device_name = args.device or config.get("device", "cpu")
+    device = resolve_device(device_name)
+
     run_logger = RunLogger(run_dir)
 
     seed_files = _discover_seed_files(run_dir, args.benchmark, args.seed)
