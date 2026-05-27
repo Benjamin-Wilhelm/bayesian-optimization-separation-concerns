@@ -36,7 +36,7 @@ All 1-D vector arguments accept:
 from __future__ import annotations
 
 import math
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 import numpy as np
 
@@ -410,69 +410,91 @@ def bootstrap_uniform_band(
     n_bootstrap: int = 10_000,
     confidence: float = 0.95,
     seed: Optional[int] = 0,
+    statistic: Literal["mean", "median"] = "mean",
 ) -> dict:
     r"""Simultaneous (uniform) bootstrap confidence band over a curve.
 
-    Given an array of shape ``(n_seeds, n_steps)``, the band is constructed
-    by resampling rows (seeds) with replacement and tracking the running
-    maximum standardised deviation:
+    Given an array of shape ``(n_seeds, n_steps)``, the band is centred on a
+    chosen central ``statistic`` (mean or median) and constructed by
+    resampling rows (seeds) with replacement, tracking the running maximum
+    standardised deviation:
 
     .. math::
 
         Q^{(b)} = \max_t \;
-          \left| \frac{\bar{c}^{(b)}_t - \bar{c}_t}{\widehat{\mathrm{SE}}_t}
+          \left| \frac{\hat{c}^{(b)}_t - \hat{c}_t}{\widehat{\mathrm{SE}}_t}
                  \right|
 
-    where :math:`\bar{c}_t` is the mean curve and
+    where :math:`\hat{c}_t` is the central curve under the chosen
+    ``statistic`` (the **same** statistic is recomputed on each resample) and
     :math:`\widehat{\mathrm{SE}}_t` is the bootstrap-estimated pointwise
-    standard error.  The ``confidence``-quantile of :math:`Q^{(b)}` gives
-    the band half-width.
+    standard error of that statistic.  The ``confidence``-quantile of
+    :math:`Q^{(b)}` gives the band half-width.  The band is therefore **not**
+    necessarily centred on the mean — it follows ``statistic``.
 
     Args:
         curves: Array of shape ``(n_seeds, n_steps)``.
         n_bootstrap: Number of bootstrap resamples.
         confidence: Nominal simultaneous coverage, e.g. ``0.95``.
         seed: Optional integer seed for reproducibility.
+        statistic: ``"mean"`` or ``"median"`` — the central statistic the
+            band is built around.
 
     Returns:
         Dictionary with keys (numpy arrays converted to lists for callers
         that need JSON output):
 
-        - ``mean``: mean curve, shape ``(n_steps,)``
-        - ``lower``: ``mean - q * se``, shape ``(n_steps,)``
-        - ``upper``: ``mean + q * se``, shape ``(n_steps,)``
+        - ``center``: central curve under ``statistic``, shape ``(n_steps,)``
+        - ``lower``: ``center - q * se``, shape ``(n_steps,)``
+        - ``upper``: ``center + q * se``, shape ``(n_steps,)``
+        - ``statistic``: ``"mean"`` or ``"median"``
         - ``confidence``: ``float``
         - ``q``: scalar quantile multiplier
         - ``n_bootstrap``: ``int``
         - ``seed``: ``Optional[int]``
         - ``band_type``: ``"uniform"``
 
-        The numerical fields ``mean``, ``lower``, ``upper`` are
+        For backward compatibility the central curve is also exposed under a
+        key named after ``statistic`` (``"mean"`` for a mean band,
+        ``"median"`` for a median band).  This named key only ever holds the
+        matching statistic, so a median band can never be mislabelled as a
+        mean band.
+
+        The numerical fields ``center``, ``lower``, ``upper`` are
         ``numpy.ndarray``; call ``.tolist()`` before JSON serialisation.
     """
+    if statistic not in ("mean", "median"):
+        raise ValueError(f"statistic must be 'mean' or 'median', got '{statistic}'")
     arr = _to_numpy_2d(curves, "curves")
     n_runs, n_steps = arr.shape
     rng = np.random.default_rng(seed)
 
-    mean_curve = arr.mean(axis=0)  # (n_steps,)
+    reducer = np.mean if statistic == "mean" else np.median
+
+    center_curve = reducer(arr, axis=0)   # (n_steps,)
     idx = rng.integers(0, n_runs, size=(n_bootstrap, n_runs))
-    boot = arr[idx].mean(axis=1)   # (n_bootstrap, n_steps)
+    boot = reducer(arr[idx], axis=1)      # (n_bootstrap, n_steps)
     se = boot.std(axis=0, ddof=1)
     se = np.where(se > 0, se, 1.0)  # avoid 0/0 for degenerate columns
 
-    max_stat = np.max(np.abs((boot - mean_curve[None, :]) / se[None, :]), axis=1)
+    max_stat = np.max(np.abs((boot - center_curve[None, :]) / se[None, :]), axis=1)
     q = float(np.quantile(max_stat, confidence))
 
-    return {
-        "mean":   mean_curve,
-        "lower":  mean_curve - q * se,
-        "upper":  mean_curve + q * se,
+    band = {
+        "center": center_curve,
+        "lower":  center_curve - q * se,
+        "upper":  center_curve + q * se,
+        "statistic":   statistic,
         "confidence":  float(confidence),
         "q":           q,
         "n_bootstrap": int(n_bootstrap),
         "seed":        None if seed is None else int(seed),
         "band_type":   "uniform",
     }
+    # Backward-compatible alias: also expose the central curve under its
+    # statistic name. Never mislabels — the key matches what it contains.
+    band[statistic] = center_curve
+    return band
 
 
 # ---------------------------------------------------------------------------
@@ -534,8 +556,8 @@ def aggregate_convergence_curves(
     - ``"pointwise"``: per-time-step quantile band from
       :func:`bootstrap_ci_curves`.  Each method returns
       ``{"center", "lower", "upper", "band_type": "pointwise"}``.
-    - ``"uniform"``: simultaneous (Kolmogorov-style) mean-curve band from
-      :func:`bootstrap_uniform_band`.  Each method returns
+    - ``"uniform"``: simultaneous (Kolmogorov-style) band around the chosen
+      ``statistic`` from :func:`bootstrap_uniform_band`.  Each method returns
       ``{"center", "lower", "upper", "q", "band_type": "uniform"}``.
     - ``"both"``: emits both bands.  Each method returns
       ``{"pointwise": {...}, "uniform": {...}}``.
@@ -543,8 +565,8 @@ def aggregate_convergence_curves(
     Args:
         method_to_curves: Mapping from method name to an array of shape
             ``(n_runs, n_steps)``.  All arrays must have the same ``n_steps``.
-        statistic: ``"mean"`` or ``"median"`` for the pointwise band.  The
-            uniform band always uses the mean.
+        statistic: ``"mean"`` or ``"median"``.  Used as the central statistic
+            for **both** the pointwise and the uniform band.
         confidence: CI level.
         n_bootstrap: Number of bootstrap resamples.
         band_type: ``"pointwise"`` | ``"uniform"`` | ``"both"``.
@@ -586,13 +608,14 @@ def aggregate_convergence_curves(
                 n_bootstrap=n_bootstrap,
                 confidence=confidence,
                 seed=random_state,
+                statistic=statistic,
             )
             uf = {
-                "center":     uf_raw["mean"],
+                "center":     uf_raw["center"],
                 "lower":      uf_raw["lower"],
                 "upper":      uf_raw["upper"],
                 "band_type":  "uniform",
-                "statistic":  "mean",
+                "statistic":  statistic,
                 "confidence": float(confidence),
                 "q":          uf_raw["q"],
             }
