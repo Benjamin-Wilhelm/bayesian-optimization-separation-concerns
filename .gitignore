@@ -1,3 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# Experiment outputs
+results/
+logs_cpu_runs/
+logs/
+*.out
+
+# Large artifacts
+*.pt
+*.pth
+*.pkl
+*.joblib
+*.npz
+
+# OS / editors
+.DS_Store
+.vscode/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
