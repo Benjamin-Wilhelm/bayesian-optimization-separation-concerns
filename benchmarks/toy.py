@@ -19,7 +19,176 @@ import torch
 
 from benchmarks.synthetic import SyntheticBenchmark
 
+class Linear1D(SyntheticBenchmark):
+    """One-dimensional linear monotone benchmark.
 
+    This is the simplest possible target-matching benchmark.
+
+    The noiseless function is
+
+        f(x) = x,   x in [0, 1].
+
+    For any target T in [0, 1], the target set {x : f(x) = T}
+    contains exactly one point, namely x* = T.
+
+    This benchmark is useful because the raw objective is perfectly smooth
+    and globally bijective, while the transformed target-matching objective
+
+        g(x) = |f(x) - T| = |x - T|
+
+    has a non-smooth cusp at the target point.
+    """
+
+    def __init__(self, noise_std: float = 0.0) -> None:
+        bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+        super().__init__(
+            name="linear_1d",
+            dim=1,
+            bounds=bounds,
+            default_noise_std=noise_std,
+        )
+
+    def f(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate f(x) = x.
+
+        Args:
+            X: Tensor of shape (..., 1), with values in [0, 1].
+
+        Returns:
+            Tensor of shape (..., 1).
+        """
+        return X[..., :1]
+    
+
+class Exponential1D(SyntheticBenchmark):
+    """One-dimensional normalized exponential monotone benchmark.
+
+    The noiseless function is
+
+        f(x) = (exp(a x) - 1) / (exp(a) - 1),   x in [0, 1],
+
+    where a > 0 controls the curvature.
+
+    The function is smooth, strictly increasing, and maps [0, 1] to [0, 1].
+    Therefore, for every target T in [0, 1], there is a unique target point.
+
+    This benchmark is slightly richer than Linear1D because the raw objective
+    is nonlinear while remaining geometrically simple. The transformed
+    objective
+
+        g(x) = |f(x) - T|
+
+    still introduces a cusp at the unique target point.
+    """
+
+    def __init__(self, noise_std: float = 0.0, rate: float = 3.0) -> None:
+        if rate <= 0:
+            raise ValueError(f"rate must be positive, got {rate}.")
+
+        self.rate = float(rate)
+
+        bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+        super().__init__(
+            name="exponential_1d",
+            dim=1,
+            bounds=bounds,
+            default_noise_std=noise_std,
+        )
+
+    def f(self, X: torch.Tensor) -> torch.Tensor:
+        """Evaluate the normalized exponential benchmark.
+
+        Args:
+            X: Tensor of shape (..., 1), with values in [0, 1].
+
+        Returns:
+            Tensor of shape (..., 1).
+        """
+        a = torch.as_tensor(self.rate, dtype=X.dtype, device=X.device)
+        numerator = torch.exp(a * X[..., :1]) - 1.0
+        denominator = torch.exp(a) - 1.0
+        return numerator / denominator
+    
+class GaussianTrap1D(SyntheticBenchmark):
+        """One-dimensional benchmark with a local near-target trap.
+
+        The noiseless function is
+
+            f(x) = x - A exp(-(x - c)^2 / (2 s^2)),   x in [0, 1].
+
+        The linear trend creates a globally interpretable target-matching problem,
+        while the Gaussian dip creates a local basin where f can come close to a
+        chosen target T without necessarily hitting it.
+
+        This is useful for testing whether fitting a GP directly on
+
+            g(x) = |f(x) - T|
+
+        can be attracted by a local near-target valley of the transformed objective.
+        """
+
+        def __init__(self, noise_std: float = 0.0) -> None:
+            self.amplitude = 0.25
+            self.center = 0.45
+            self.width = 0.08
+
+            bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+            super().__init__(
+                name="gaussian_trap_1d",
+                dim=1,
+                bounds=bounds,
+                default_noise_std=noise_std,
+            )
+
+        def f(self, X: torch.Tensor) -> torch.Tensor:
+            x = X[..., :1]
+
+            A = torch.as_tensor(self.amplitude, dtype=X.dtype, device=X.device)
+            c = torch.as_tensor(self.center, dtype=X.dtype, device=X.device)
+            s = torch.as_tensor(self.width, dtype=X.dtype, device=X.device)
+
+            dip = A * torch.exp(-0.5 * ((x - c) / s) ** 2)
+            return x - dip
+        
+class DampedOscillatoryTrap1D(SyntheticBenchmark):
+    """One-dimensional damped oscillatory benchmark.
+
+    The noiseless function is
+
+        f(x) = x + a exp(-lambda x) sin(2 pi m x),   x in [0, 1].
+
+    The linear trend gives a global direction, while the damped oscillation
+    creates local near-target regions. For suitable targets, the transformed
+    objective
+
+        g(x) = |f(x) - T|
+
+    has several local valleys, which can mislead a GP fitted directly on g.
+    """
+
+    def __init__(self, noise_std: float = 0.0) -> None:
+        self.amplitude = 0.22
+        self.decay = 2.5
+        self.frequency = 5.0
+
+        bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+        super().__init__(
+            name="damped_oscillatory_trap_1d",
+            dim=1,
+            bounds=bounds,
+            default_noise_std=noise_std,
+        )
+
+    def f(self, X: torch.Tensor) -> torch.Tensor:
+        x = X[..., :1]
+
+        a = torch.as_tensor(self.amplitude, dtype=X.dtype, device=X.device)
+        decay = torch.as_tensor(self.decay, dtype=X.dtype, device=X.device)
+        freq = torch.as_tensor(self.frequency, dtype=X.dtype, device=X.device)
+        two_pi = torch.as_tensor(2.0 * torch.pi, dtype=X.dtype, device=X.device)
+
+        oscillation = a * torch.exp(-decay * x) * torch.sin(two_pi * freq * x)
+        return x + oscillation
 # ---------------------------------------------------------------------------
 # SineTrend 1-D  (pedagogical)
 # ---------------------------------------------------------------------------
@@ -32,7 +201,6 @@ DEFAULT_NOISE_STD_SINE_TREND1D: float = 0.05
 # achievable target distance.
 _SINE_TREND1D_F_MIN: float = -0.7656308116
 _SINE_TREND1D_F_MAX: float =  1.0797900769
-
 
 class SineTrend1D(SyntheticBenchmark):
     """Pedagogical 1-D benchmark for interpretability and visualisation.
