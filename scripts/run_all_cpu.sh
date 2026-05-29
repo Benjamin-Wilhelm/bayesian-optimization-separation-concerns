@@ -10,15 +10,23 @@ CONFIG_DIR="experiments/exp_a_target_matching/configs"
 LOG_DIR="logs_cpu_runs"
 MAX_PARALLEL=2
 
-# Use the local Windows venv Python explicitly.
-PYTHON=".venv/Scripts/python.exe"
+if [[ -x ".venv/bin/python" ]]; then
+  PYTHON=".venv/bin/python"              # Linux / macOS
+elif [[ -x ".venv/Scripts/python.exe" ]]; then
+  PYTHON=".venv/Scripts/python.exe"      # Windows Git Bash
+else
+  PYTHON="python"                        # fallback
+fi
+
+echo "Using Python: ${PYTHON}"
+"${PYTHON}" --version
 
 mkdir -p "${LOG_DIR}"
 
 CONFIGS=(
   
   "exponential_1d_short.yaml"
-  "gaussian_trap_1d_short.yaml"
+
 
 )
 
