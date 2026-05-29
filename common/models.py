@@ -22,7 +22,10 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import torch
-from botorch.fit import fit_gpytorch_model
+try:
+    from botorch.fit import fit_gpytorch_mll as fit_gpytorch_model
+except ImportError:
+    from botorch.fit import fit_gpytorch_model
 from botorch.models import FixedNoiseGP, ModelListGP, SingleTaskGP
 from botorch.models.transforms.input import Normalize
 from botorch.models.transforms.outcome import Standardize
