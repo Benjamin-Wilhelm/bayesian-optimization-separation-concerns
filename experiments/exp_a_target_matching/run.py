@@ -304,6 +304,34 @@ def resolve_device(name: str) -> torch.device:
     return torch.device(name)
 
 
+def _parse_bounds_config(bounds_cfg: Any) -> torch.Tensor:
+    """Convert the YAML ``bounds`` block into a ``(2, dim)`` ``torch.double`` tensor.
+
+    Accepted forms::
+
+        bounds:
+          lower: [0.0]
+          upper: [1.0]
+
+    or the equivalent nested-list form ``[[0.0], [1.0]]``.  Full validation
+    (shape, lower < upper) is performed downstream in :class:`ProblemSpec`.
+    """
+    if isinstance(bounds_cfg, dict):
+        if "lower" not in bounds_cfg or "upper" not in bounds_cfg:
+            raise ValueError(
+                "config['bounds'] mapping must contain both 'lower' and 'upper' keys."
+            )
+        lower = list(bounds_cfg["lower"])
+        upper = list(bounds_cfg["upper"])
+        if len(lower) != len(upper):
+            raise ValueError(
+                f"config['bounds']['lower'] and ['upper'] must have the same "
+                f"length, got {len(lower)} vs {len(upper)}."
+            )
+        return torch.as_tensor([lower, upper], dtype=torch.double)
+    return torch.as_tensor(bounds_cfg, dtype=torch.double)
+
+
 def main(argv: Optional[list[str]] = None) -> Path:
     start_time = time.perf_counter()
     args = _parse_args(argv)
@@ -316,7 +344,12 @@ def main(argv: Optional[list[str]] = None) -> Path:
             f"Unknown benchmark '{benchmark_name}'.  "
             f"Known: {sorted(BENCHMARK_REGISTRY)}"
         )
-    problem = BENCHMARK_REGISTRY[benchmark_name](noise_std=float(config["noise_std"]))
+    bounds_cfg = config.get("bounds")
+    bounds_override = _parse_bounds_config(bounds_cfg) if bounds_cfg is not None else None
+    problem_kwargs: dict[str, Any] = {"noise_std": float(config["noise_std"])}
+    if bounds_override is not None:
+        problem_kwargs["bounds"] = bounds_override
+    problem = BENCHMARK_REGISTRY[benchmark_name](**problem_kwargs)
 
     tag = args.tag or config.get("tag") 
     logger = RunLogger.create(
@@ -336,12 +369,14 @@ def main(argv: Optional[list[str]] = None) -> Path:
         "budget":     int(config["budget"]),
         "noise_std":  float(config["noise_std"]),
         "methods":    list(config["methods"]),
+        "bounds":     problem.bounds.detach().cpu().tolist(),
     })
 
     log.info("=" * 60)
     log.info(f"Run: {logger.run_id()}")
     log.info(f"  device    = {device}")
     log.info(f"  benchmark = {problem.name}  dim={problem.dim}")
+    log.info(f"  bounds    = {problem.bounds.detach().cpu().tolist()}")
     log.info(f"  target    = {config['target']}  noise_std = {config['noise_std']}")
     log.info(f"  n_initial = {config['initial_design_size']}  budget = {config['budget']}")
     log.info(f"  methods   = {list(config['methods'])}")

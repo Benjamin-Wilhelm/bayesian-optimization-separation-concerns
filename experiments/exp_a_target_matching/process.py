@@ -37,7 +37,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from benchmarks import BENCHMARK_REGISTRY, SyntheticBenchmark
+from benchmarks import (
+    BENCHMARK_REGISTRY,
+    SyntheticBenchmark,
+    build_benchmark_from_metadata,
+)
 from common.diagnostics import (
     calibration_summary,
     joint_gaussian_nlpd,
@@ -390,7 +394,17 @@ def _process_one_seed(
     benchmark_name = raw.metadata.benchmark
     if benchmark_name not in BENCHMARK_REGISTRY:
         raise ValueError(f"Benchmark '{benchmark_name}' not in BENCHMARK_REGISTRY.")
-    problem = BENCHMARK_REGISTRY[benchmark_name](noise_std=raw.metadata.noise_std)
+    # Reconstruct with the bounds recorded at run time so derived grids match
+    # the actual optimisation domain.  Falls back (with a warning) to current
+    # defaults only for legacy runs that did not record bounds.
+    problem = build_benchmark_from_metadata(
+        benchmark_name,
+        metadata={
+            "bounds": raw.metadata.bounds,
+            "noise_std": raw.metadata.noise_std,
+        },
+        noise_std=raw.metadata.noise_std,
+    )
 
     target = raw.metadata.target
     epsilon = config.get("epsilon")
