@@ -3,11 +3,21 @@ set -euo pipefail
 
 RESULTS_ROOT="results/exp_a_target_matching/runs"
 
+# Usage:
+#   bash scripts/process_latest_short_runs.sh
+#   bash scripts/process_latest_short_runs.sh 5
+#
+# Argument optionnel :
+#   $1 = nombre de runs récents à traiter
+N_LATEST="${1:-1}"
+
+if ! [[ "$N_LATEST" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: N_LATEST must be a strictly positive integer."
+  echo "Usage: bash $0 [N_LATEST]"
+  exit 1
+fi
+
 # Détection robuste du Python à utiliser.
-# Ordre :
-# 1. venv Linux/macOS
-# 2. venv Windows, utile si lancé depuis Git Bash sur Windows
-# 3. python disponible globalement
 if [[ -x ".venv/bin/python" ]]; then
   PYTHON=".venv/bin/python"
 elif [[ -x ".venv/Scripts/python.exe" ]]; then
@@ -25,45 +35,52 @@ fi
 
 echo "Using Python: $PYTHON"
 
-# Vérifie que le dossier de résultats existe.
 if [[ ! -d "$RESULTS_ROOT" ]]; then
   echo "ERROR: results directory not found: $RESULTS_ROOT"
   exit 1
 fi
 
-patterns=(
-  "*linear_1d_short"
-  "*exponential_1d_short"
-  "*gaussian_trap_1d_short"
-  "*damped_oscillatory_trap_1d_short"
+echo "============================================================"
+echo "Looking for the ${N_LATEST} latest short runs"
+
+mapfile -t matches < <(
+  find "$RESULTS_ROOT" \
+    -maxdepth 1 \
+    -type d \
+    \( \
+      -name "*linear_1d_short" \
+      -o -name "*exponential_1d_short" \
+      -o -name "*gaussian_trap_1d_short" \
+      -o -name "*damped_oscillatory_trap_1d_short" \
+    \) \
+    -printf "%T@ %p\n" \
+    | sort -nr \
+    | head -n "$N_LATEST" \
+    | awk '{$1=""; sub(/^ /,""); print}'
 )
 
-for pattern in "${patterns[@]}"; do
+if [[ ${#matches[@]} -eq 0 ]]; then
+  echo "ERROR: no matching run found."
+  exit 1
+fi
+
+echo "Selected runs:"
+for run_dir in "${matches[@]}"; do
+  echo "  - $run_dir"
+done
+
+for run_dir in "${matches[@]}"; do
   echo "============================================================"
-  echo "Looking for latest run matching: ${pattern}"
-
-  # mapfile évite les soucis avec les espaces dans les chemins.
-  mapfile -t matches < <(find "$RESULTS_ROOT" -maxdepth 1 -type d -name "$pattern" -printf "%T@ %p\n" \
-    | sort -nr \
-    | awk '{$1=""; sub(/^ /,""); print}')
-
-  if [[ ${#matches[@]} -eq 0 ]]; then
-    echo "WARNING: no run found for pattern ${pattern}"
-    continue
-  fi
-
-  run_dir="${matches[0]}"
-
-  echo "Selected run: $run_dir"
-
   echo "Processing $run_dir"
-  "$PYTHON" -m experiments.exp_a_target_matching.process --run-dir "$run_dir"
+  "$PYTHON" -m experiments.exp_a_target_matching.process \
+    --run-dir "$run_dir"
 
   echo "Analyzing $run_dir"
-  "$PYTHON" -m experiments.exp_a_target_matching.analyze --run-dir "$run_dir"
+  "$PYTHON" -m experiments.exp_a_target_matching.analyze \
+    --run-dir "$run_dir"
 
   echo "Done: $run_dir"
 done
 
 echo "============================================================"
-echo "All available runs processed and analyzed."
+echo "The ${#matches[@]} latest available runs have been processed and analyzed."

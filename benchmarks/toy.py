@@ -14,11 +14,11 @@ meaningful for target-matching experiments.
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 import torch
 
-from benchmarks.synthetic import SyntheticBenchmark
+from benchmarks.synthetic import SyntheticBenchmark, _normalise_bounds_config
 
 class Linear1D(SyntheticBenchmark):
     """One-dimensional linear monotone benchmark.
@@ -97,7 +97,7 @@ class Exponential1D(SyntheticBenchmark):
 
         self.rate = float(rate)
 
-        default_bounds = torch.tensor([[-20.0], [20.0]], dtype=torch.double)
+        default_bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
         super().__init__(
             name="exponential_1d",
             dim=1,
@@ -118,52 +118,138 @@ class Exponential1D(SyntheticBenchmark):
         numerator = torch.exp(a * X[..., :1]) - 1.0
         denominator = torch.exp(a) - 1.0
         return numerator / denominator
-    
+
+    _CONFIG_KEYS: frozenset[str] = frozenset({"name", "noise_std", "bounds", "rate"})
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "Exponential1D":
+        cls._check_allowed_keys(config, cls._CONFIG_KEYS)
+        kwargs = cls._extract_common_kwargs(config)
+        if "rate" in config and config["rate"] is not None:
+            kwargs["rate"] = float(config["rate"])
+        return cls(**kwargs)
+
+
 class GaussianTrap1D(SyntheticBenchmark):
-        """One-dimensional benchmark with a local near-target trap.
+    """One-dimensional target-matching benchmark with a local near-target trap.
 
-        The noiseless function is
+    The noiseless function is
 
-            f(x) = x - A exp(-(x - c)^2 / (2 s^2)),   x in [0, 1].
+        f(x) = x - A exp(-(x - c)^2 / (2 s^2))
 
-        The linear trend creates a globally interpretable target-matching problem,
-        while the Gaussian dip creates a local basin where f can come close to a
-        chosen target T without necessarily hitting it.
+    on a configurable one-dimensional domain.
 
-        This is useful for testing whether fitting a GP directly on
+    Parameters are expressed through the intended trap geometry:
 
-            g(x) = |f(x) - T|
+        trap_location:
+            Position of the local near-target minimum of |f(x) - T|.
 
-        can be attracted by a local near-target valley of the transformed objective.
-        """
+        width:
+            Width s of the Gaussian dip.
 
-        def __init__(
-            self,
-            noise_std: float = 0.0,
-            bounds: Optional[torch.Tensor] = None,
-            ) -> None:
-            self.amplitude = 0.25
-            self.center = 0.45
-            self.width = 0.08
+        shape:
+            Value u > 1 controlling the shape of the dip.
 
-            default_bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
-            super().__init__(
-                name="gaussian_trap_1d",
-                dim=1,
-                bounds=SyntheticBenchmark.resolve_bounds(default_bounds, bounds),
-                default_noise_std=noise_std,
+        trap_gap:
+            Positive local distance |f(x_trap) - T| at the false minimum.
+    """
+
+    def __init__(
+        self,
+        noise_std: float = 0.0,
+        trap_location: float = 0.40,
+        width: float = 0.08,
+        shape: float = 2.0,
+        trap_gap: float = 0.02,
+        bounds: torch.Tensor | None = None,
+    ) -> None:
+        if width <= 0:
+            raise ValueError("width must be strictly positive.")
+
+        if shape <= 1:
+            raise ValueError(
+                "shape must be greater than 1 to define the left local maximum."
             )
 
-        def f(self, X: torch.Tensor) -> torch.Tensor:
-            x = X[..., :1]
+        if trap_gap <= 0:
+            raise ValueError("trap_gap must be strictly positive.")
 
-            A = torch.as_tensor(self.amplitude, dtype=X.dtype, device=X.device)
-            c = torch.as_tensor(self.center, dtype=X.dtype, device=X.device)
-            s = torch.as_tensor(self.width, dtype=X.dtype, device=X.device)
+        self.trap_location = float(trap_location)
+        self.width = float(width)
+        self.shape = float(shape)
+        self.trap_gap = float(trap_gap)
 
-            dip = A * torch.exp(-0.5 * ((x - c) / s) ** 2)
-            return x - dip
-        
+        self.amplitude = (
+            self.width
+            * math.exp(self.shape**2 / 2.0)
+            / self.shape
+        )
+
+        self.center = (
+            self.trap_location
+            + self.width * self.shape
+        )
+
+        self.target = (
+            self.trap_location
+            - self.width / self.shape
+            + self.trap_gap
+        )
+
+        default_bounds = torch.tensor(
+            [[0.0], [1.0]],
+            dtype=torch.double,
+        )
+
+        resolved_bounds = SyntheticBenchmark.resolve_bounds(default_bounds, bounds)
+
+        if not (
+            resolved_bounds[0, 0].item() <= self.trap_location
+            <= resolved_bounds[1, 0].item()
+        ):
+            raise ValueError("trap_location must lie inside the domain.")
+
+        if not (
+            resolved_bounds[0, 0].item() <= self.center
+            <= resolved_bounds[1, 0].item()
+        ):
+            raise ValueError("Gaussian center must lie inside the domain.")
+
+        super().__init__(
+            name="gaussian_trap_1d",
+            dim=1,
+            bounds=resolved_bounds,
+            default_noise_std=noise_std,
+        )
+
+    def f(self, X: torch.Tensor) -> torch.Tensor:
+        x = X[..., 0]
+
+        return x - self.amplitude * torch.exp(
+            -((x - self.center) ** 2)
+            / (2.0 * self.width**2)
+        )
+
+    _CONFIG_KEYS: frozenset[str] = frozenset({
+        "name",
+        "noise_std",
+        "bounds",
+        "trap_location",
+        "width",
+        "shape",
+        "trap_gap",
+    })
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "GaussianTrap1D":
+        cls._check_allowed_keys(config, cls._CONFIG_KEYS)
+        kwargs = cls._extract_common_kwargs(config)
+        for key in ("trap_location", "width", "shape", "trap_gap"):
+            if key in config and config[key] is not None:
+                kwargs[key] = float(config[key])
+        return cls(**kwargs)
+
+
 class DampedOscillatoryTrap1D(SyntheticBenchmark):
     """One-dimensional damped oscillatory benchmark.
 

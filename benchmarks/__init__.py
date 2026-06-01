@@ -40,36 +40,97 @@ BENCHMARK_REGISTRY: dict[str, type[SyntheticBenchmark]] = {
 }
 
 
+def _benchmark_section(config: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Extract ``(name, sub_config)`` from a top-level YAML config.
+
+    Two layouts are supported, in this order of preference:
+
+    Nested (recommended)::
+
+        benchmark:
+          name: gaussian_trap_1d
+          bounds: [[0.0], [1.0]]
+          noise_std: 0.0
+          width: 0.08
+
+    Flat (legacy)::
+
+        benchmark: gaussian_trap_1d
+        noise_std: 0.0
+        bounds:
+          lower: [0.0]
+          upper: [1.0]
+    """
+    bench = config.get("benchmark")
+    if isinstance(bench, Mapping):
+        if "name" not in bench:
+            raise KeyError(
+                "config['benchmark'] mapping must contain a 'name' key."
+            )
+        name = str(bench["name"])
+        sub = {k: v for k, v in bench.items() if k != "name"}
+        return name, sub
+    if isinstance(bench, str):
+        sub: dict[str, Any] = {}
+        if config.get("noise_std") is not None:
+            sub["noise_std"] = config["noise_std"]
+        if config.get("bounds") is not None:
+            sub["bounds"] = config["bounds"]
+        return bench, sub
+    raise TypeError(
+        "config['benchmark'] must be a string (legacy flat layout) or a "
+        "mapping with a 'name' key (nested layout)."
+    )
+
+
+def build_benchmark(config: Mapping[str, Any]) -> SyntheticBenchmark:
+    """Construct a :class:`SyntheticBenchmark` from a top-level YAML config.
+
+    The benchmark is the single source of truth for its domain and intrinsic
+    parameters.  BO-strategy parameters (``beta``, ``budget``,
+    ``initial_design_size``, ``num_restarts``, ``raw_samples``, ...) must not
+    appear in the ``benchmark`` sub-config — :meth:`SyntheticBenchmark.from_config`
+    rejects unknown keys explicitly to avoid silently ignoring typos.
+
+    See :func:`_benchmark_section` for the two accepted YAML layouts.
+    """
+    name, sub = _benchmark_section(config)
+    if name not in BENCHMARK_REGISTRY:
+        raise KeyError(
+            f"Unknown benchmark '{name}'.  Known: {sorted(BENCHMARK_REGISTRY)}"
+        )
+    return BENCHMARK_REGISTRY[name].from_config(sub)
+
+
 def build_benchmark_from_metadata(
     name: str,
     metadata: Optional[Mapping[str, Any]] = None,
     *,
     noise_std: Optional[float] = None,
-    bounds: Optional[torch.Tensor] = None,
+    bounds: Optional[Any] = None,
 ) -> SyntheticBenchmark:
-    """Instantiate a benchmark, preferring bounds saved in metadata.
+    """Instantiate a benchmark from a per-seed metadata dict.
+
+    Kept as a convenience for callers that already have the resolved bounds
+    in hand (e.g. ``process.py`` reading ``SeedMetadata``).  Prefer
+    :func:`build_benchmark` when starting from a YAML/JSON top-level config.
 
     Resolution order for the bounds:
 
-    1. ``bounds`` keyword argument (highest priority).
+    1. ``bounds`` keyword argument.
     2. ``metadata["bounds"]`` if present.
-    3. The benchmark class default (with a :mod:`warnings` warning so that the
-       caller knows the run did not record its bounds — typical of older runs
-       produced before bounds were configurable).
-
-    The ``noise_std`` is resolved similarly: explicit keyword first, then
-    ``metadata["noise_std"]`` if present.
+    3. The benchmark class default (with a :mod:`warnings` warning).
     """
     if name not in BENCHMARK_REGISTRY:
         raise ValueError(
             f"Unknown benchmark '{name}'.  Known: {sorted(BENCHMARK_REGISTRY)}"
         )
 
-    kwargs: dict[str, Any] = {}
+    sub: dict[str, Any] = {}
     if noise_std is not None:
-        kwargs["noise_std"] = float(noise_std)
+        sub["noise_std"] = float(noise_std)
     elif metadata is not None and metadata.get("noise_std") is not None:
-        kwargs["noise_std"] = float(metadata["noise_std"])
+        sub["noise_std"] = float(metadata["noise_std"])
 
     if bounds is None and metadata is not None:
         bounds = metadata.get("bounds")
@@ -83,9 +144,9 @@ def build_benchmark_from_metadata(
             stacklevel=2,
         )
     else:
-        kwargs["bounds"] = torch.as_tensor(bounds, dtype=torch.double)
+        sub["bounds"] = bounds
 
-    return BENCHMARK_REGISTRY[name](**kwargs)
+    return BENCHMARK_REGISTRY[name].from_config(sub)
 
 
 __all__ = [
@@ -103,5 +164,6 @@ __all__ = [
     "DEFAULT_NOISE_STD_BRANIN",
     "DEFAULT_NOISE_STD_HARTMANN6",
     "BENCHMARK_REGISTRY",
+    "build_benchmark",
     "build_benchmark_from_metadata",
 ]

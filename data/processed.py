@@ -152,7 +152,12 @@ class TestGrid:
             for near-target points. None unless using a separate filtered pool.
 
         m_test_joint_distrib: Optional number of test points used when
-            evaluating joint Gaussian posterior quantities.
+            evaluating joint Gaussian posterior quantities on the global grid.
+
+        m_test_joint_near_target: Optional number of test points used when
+            evaluating the joint Gaussian posterior restricted to the
+            near-target subset (``|f - T| <= near_target_epsilon``).  Mirrors
+            ``m_test_joint_distrib`` but on the near-target slice.
     """
 
     n_test: int
@@ -165,13 +170,16 @@ class TestGrid:
     near_target_pool_size: Optional[int] = None
 
     m_test_joint_distrib: Optional[int] = None
+    m_test_joint_near_target: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "TestGrid":
-        return cls(**d)
+        # Tolerate older processed files lacking newer fields.
+        known = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
     
 @dataclasses.dataclass

@@ -15,11 +15,51 @@ The central observation contract is unchanged::
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import torch
 
 from common.problems import Observation, ProblemSpec
+
+
+# Keys accepted at the top of every benchmark configuration block.
+_COMMON_CONFIG_KEYS: frozenset[str] = frozenset({"name", "noise_std", "bounds"})
+
+
+def _normalise_bounds_config(bounds: Any) -> torch.Tensor:
+    """Convert a YAML ``bounds`` entry into a ``(2, dim)`` ``torch.double`` tensor.
+
+    Accepted forms::
+
+        # canonical (tensor-compatible) list-of-lists
+        bounds:
+          - [lb_1, ..., lb_d]
+          - [ub_1, ..., ub_d]
+
+        # equivalent mapping form (legacy)
+        bounds:
+          lower: [lb_1, ..., lb_d]
+          upper: [ub_1, ..., ub_d]
+
+    Full validation (shape, ``lower < upper``) is performed downstream by
+    :class:`~common.problems.ProblemSpec`.
+    """
+    if isinstance(bounds, torch.Tensor):
+        return bounds.to(torch.double)
+    if isinstance(bounds, Mapping):
+        if "lower" not in bounds or "upper" not in bounds:
+            raise ValueError(
+                "Mapping form of 'bounds' requires both 'lower' and 'upper' keys."
+            )
+        lower = list(bounds["lower"])
+        upper = list(bounds["upper"])
+        if len(lower) != len(upper):
+            raise ValueError(
+                f"'bounds.lower' and 'bounds.upper' must have the same length, "
+                f"got {len(lower)} vs {len(upper)}."
+            )
+        return torch.as_tensor([lower, upper], dtype=torch.double)
+    return torch.as_tensor(bounds, dtype=torch.double)
 
 
 class SyntheticBenchmark(ProblemSpec):
@@ -55,14 +95,71 @@ class SyntheticBenchmark(ProblemSpec):
 
         If ``override`` is ``None``, ``default_bounds`` is returned (cast to double).
         Otherwise ``override`` is converted to a ``torch.double`` tensor of shape
-        ``(2, dim)``.  Full validation (shape, ``lower < upper``, dtype) is performed
-        downstream by :class:`~common.problems.ProblemSpec`.
+        ``(2, dim)`` via :func:`_normalise_bounds_config`.  Full validation (shape,
+        ``lower < upper``, dtype) is performed downstream by
+        :class:`~common.problems.ProblemSpec`.
         """
         if override is None:
             return default_bounds.to(torch.double)
-        if isinstance(override, torch.Tensor):
-            return override.to(torch.double)
-        return torch.as_tensor(override, dtype=torch.double)
+        return _normalise_bounds_config(override)
+
+    # ------------------------------------------------------------------
+    # YAML configuration entry point
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "SyntheticBenchmark":
+        """Build a benchmark instance from its YAML sub-configuration.
+
+        The default implementation supports the keys :attr:`_COMMON_CONFIG_KEYS`
+        (``name``, ``noise_std``, ``bounds``).  Subclasses with additional
+        intrinsic parameters (e.g. ``rate`` for :class:`Exponential1D` or
+        geometric parameters for :class:`GaussianTrap1D`) must override this
+        method and explicitly list the keys they accept.
+
+        Unknown keys raise :class:`ValueError` so that typos and misplaced
+        keys (e.g. ``beta`` accidentally added under ``benchmark:``) cannot be
+        silently ignored.
+
+        The ``name`` key is informational only — dispatch is performed by the
+        caller (see :func:`benchmarks.build_benchmark`).  When present, it is
+        ignored at this level.
+        """
+        cls._check_allowed_keys(config, _COMMON_CONFIG_KEYS)
+        kwargs = cls._extract_common_kwargs(config)
+        return cls(**kwargs)
+
+    # ------------------------------------------------------------------
+    # Helpers for subclasses' from_config implementations
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _check_allowed_keys(
+        cls,
+        config: Mapping[str, Any],
+        allowed: frozenset[str],
+        ) -> None:
+        unknown = set(config) - set(allowed)
+        if unknown:
+            raise ValueError(
+                f"Unknown keys in benchmark config for {cls.__name__}: "
+                f"{sorted(unknown)}. Allowed keys: {sorted(allowed)}."
+            )
+
+    @staticmethod
+    def _extract_common_kwargs(config: Mapping[str, Any]) -> dict[str, Any]:
+        """Pick the common ``noise_std`` and ``bounds`` kwargs from ``config``.
+
+        ``bounds`` is normalised via :func:`_normalise_bounds_config`; ``None``
+        values are dropped so that the benchmark constructor falls back to its
+        default.
+        """
+        kwargs: dict[str, Any] = {}
+        if "noise_std" in config and config["noise_std"] is not None:
+            kwargs["noise_std"] = float(config["noise_std"])
+        if config.get("bounds") is not None:
+            kwargs["bounds"] = _normalise_bounds_config(config["bounds"])
+        return kwargs
 
     # ------------------------------------------------------------------
     # Noiseless function (subclasses must implement)

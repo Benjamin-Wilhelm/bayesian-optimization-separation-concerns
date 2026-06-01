@@ -36,7 +36,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from acquisitions.target_matching import TargetMatchingUCB, WrongTargetMatchingUCB
-from benchmarks import BENCHMARK_REGISTRY, SyntheticBenchmark
+from benchmarks import BENCHMARK_REGISTRY, SyntheticBenchmark, build_benchmark
 from common.initial_design import sobol_design
 from common.logging import RunLogger
 from common.models import GPModelBuilder, GPModelConfig, serialize_state_dict
@@ -220,7 +220,8 @@ def _run_one_seed(
 
     n_initial = int(config["initial_design_size"])
     target    = float(config["target"])
-    noise_std = float(config["noise_std"])
+    # noise_std lives on the benchmark — single source of truth.
+    noise_std = float(problem.default_noise_std or 0.0)
 
     X_init = sobol_design(problem.bounds, n=n_initial, seed=seed).to(device)
     obs_init = problem.observe(X_init)
@@ -304,52 +305,13 @@ def resolve_device(name: str) -> torch.device:
     return torch.device(name)
 
 
-def _parse_bounds_config(bounds_cfg: Any) -> torch.Tensor:
-    """Convert the YAML ``bounds`` block into a ``(2, dim)`` ``torch.double`` tensor.
-
-    Accepted forms::
-
-        bounds:
-          lower: [0.0]
-          upper: [1.0]
-
-    or the equivalent nested-list form ``[[0.0], [1.0]]``.  Full validation
-    (shape, lower < upper) is performed downstream in :class:`ProblemSpec`.
-    """
-    if isinstance(bounds_cfg, dict):
-        if "lower" not in bounds_cfg or "upper" not in bounds_cfg:
-            raise ValueError(
-                "config['bounds'] mapping must contain both 'lower' and 'upper' keys."
-            )
-        lower = list(bounds_cfg["lower"])
-        upper = list(bounds_cfg["upper"])
-        if len(lower) != len(upper):
-            raise ValueError(
-                f"config['bounds']['lower'] and ['upper'] must have the same "
-                f"length, got {len(lower)} vs {len(upper)}."
-            )
-        return torch.as_tensor([lower, upper], dtype=torch.double)
-    return torch.as_tensor(bounds_cfg, dtype=torch.double)
-
-
 def main(argv: Optional[list[str]] = None) -> Path:
     start_time = time.perf_counter()
     args = _parse_args(argv)
     config = _load_config(args.config)
     device_name = args.device if args.device is not None else config.get("device", "cpu")
     device = resolve_device(device_name)
-    benchmark_name = config["benchmark"]
-    if benchmark_name not in BENCHMARK_REGISTRY:
-        raise ValueError(
-            f"Unknown benchmark '{benchmark_name}'.  "
-            f"Known: {sorted(BENCHMARK_REGISTRY)}"
-        )
-    bounds_cfg = config.get("bounds")
-    bounds_override = _parse_bounds_config(bounds_cfg) if bounds_cfg is not None else None
-    problem_kwargs: dict[str, Any] = {"noise_std": float(config["noise_std"])}
-    if bounds_override is not None:
-        problem_kwargs["bounds"] = bounds_override
-    problem = BENCHMARK_REGISTRY[benchmark_name](**problem_kwargs)
+    problem = build_benchmark(config)
 
     tag = args.tag or config.get("tag") 
     logger = RunLogger.create(
@@ -367,7 +329,7 @@ def main(argv: Optional[list[str]] = None) -> Path:
         "seeds":      list(config["seeds"]),
         "target":     float(config["target"]),
         "budget":     int(config["budget"]),
-        "noise_std":  float(config["noise_std"]),
+        "noise_std":  float(problem.default_noise_std or 0.0),
         "methods":    list(config["methods"]),
         "bounds":     problem.bounds.detach().cpu().tolist(),
     })
@@ -377,7 +339,7 @@ def main(argv: Optional[list[str]] = None) -> Path:
     log.info(f"  device    = {device}")
     log.info(f"  benchmark = {problem.name}  dim={problem.dim}")
     log.info(f"  bounds    = {problem.bounds.detach().cpu().tolist()}")
-    log.info(f"  target    = {config['target']}  noise_std = {config['noise_std']}")
+    log.info(f"  target    = {config['target']}  noise_std = {problem.default_noise_std}")
     log.info(f"  n_initial = {config['initial_design_size']}  budget = {config['budget']}")
     log.info(f"  methods   = {list(config['methods'])}")
     log.info(f"  seeds     = {list(config['seeds'])}")

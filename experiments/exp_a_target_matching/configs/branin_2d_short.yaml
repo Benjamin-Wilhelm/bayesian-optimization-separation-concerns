@@ -1,5 +1,6 @@
+```yaml
 experiment:            exp_a_target_matching
-tag:                   branin_2d_noiseless_100seeds
+tag:                   branin_2d_single_ring_noiseless_100seeds
 benchmark:             branin_2d
 
 seeds:                 [1,2,3,4,5,6,7,8,9,10,
@@ -13,7 +14,11 @@ seeds:                 [1,2,3,4,5,6,7,8,9,10,
                         81,82,83,84,85,86,87,88,89,90,
                         91,92,93,94,95,96,97,98,99,100]
 
-target:                10.0
+bounds:
+  lower:               [1.7, 0.0]
+  upper:               [4.6, 5.0]
+
+target:                5.0
 beta:                  2.0
 
 initial_design_size:   4
@@ -57,3 +62,4 @@ aggregate:
   confidence:                     0.95
   aggregate_calibration_curves:   true
   aggregate_instantaneous_curves: true
+```

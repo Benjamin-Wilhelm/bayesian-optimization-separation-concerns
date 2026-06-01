@@ -88,10 +88,19 @@ _CALIB_GLOBAL_KEYS: list[str] = [
     "pit_std",
     "confidence_violation_rate",
 ]
+# Near-target joint-posterior scalars (computed only when both
+# ``near_target_epsilon`` and ``m_test_joint_near_target`` are set).
+_CALIB_NEAR_TARGET_JOINT_KEYS: list[str] = [
+    "joint_nlpd",
+    "joint_mahalanobis_sq",
+    "joint_logdet",
+    "joint_n_test",
+    "joint_total_count",
+]
 _CALIB_NEAR_TARGET_KEYS: list[str] = _CALIB_GLOBAL_KEYS + [
     "near_target_count",
     "near_target_fraction",
-]
+] + _CALIB_NEAR_TARGET_JOINT_KEYS
 
 # Joint-posterior scalars (computed only when m_test_joint_distrib is set).
 _CALIB_JOINT_KEYS: list[str] = [
@@ -493,7 +502,9 @@ def _build_calibration_curves(
     :func:`_band_type_for_calibration_key`.
     """
     global_keys = _CALIB_GLOBAL_KEYS
-    near_target_keys = _CALIB_GLOBAL_KEYS  # same scalar list
+    # Per-checkpoint near-target curves track the standard calibration scalars
+    # plus the near-target joint NLPD scalars.
+    near_target_keys = _CALIB_GLOBAL_KEYS + _CALIB_NEAR_TARGET_JOINT_KEYS
     joint_keys = _CALIB_JOINT_KEYS
 
     out: dict[str, Any] = {
