@@ -274,14 +274,17 @@ class SeedMetadata:
     target: float
     noise_std: float
     dim: int
-    bounds: list[list[float]]
+    bounds: Optional[list[list[float]]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "SeedMetadata":
-        return cls(**d)
+        # Filter unknown keys so the loader is tolerant of newer fields when
+        # an older codebase reads recent results, and vice-versa.
+        known = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 # ---------------------------------------------------------------------------

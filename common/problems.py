@@ -128,11 +128,19 @@ class ProblemSpec(ABC):
         problem_type: str,
         default_noise_std: Optional[float] = None,) -> None:
 
+        if not isinstance(bounds, torch.Tensor):
+            bounds = torch.as_tensor(bounds, dtype=torch.double)
         if bounds.shape != (2, dim):
             raise ValueError(f"bounds must have shape (2, dim)={(2, dim)}, got {tuple(bounds.shape)}")
+        bounds = bounds.to(torch.double)
+        if not torch.all(bounds[0] < bounds[1]):
+            raise ValueError(
+                f"bounds must satisfy lower < upper componentwise, got "
+                f"lower={bounds[0].tolist()} upper={bounds[1].tolist()}"
+            )
         self.name = name
         self.dim = dim
-        self.bounds = bounds.to(torch.double)
+        self.bounds = bounds
         self.problem_type = problem_type
         self.default_noise_std = default_noise_std
 
