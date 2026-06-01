@@ -14,6 +14,7 @@ meaningful for target-matching experiments.
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 import torch
 
@@ -39,12 +40,16 @@ class Linear1D(SyntheticBenchmark):
     has a non-smooth cusp at the target point.
     """
 
-    def __init__(self, noise_std: float = 0.0) -> None:
-        bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+    def __init__(
+        self,
+        noise_std: float = 0.0,
+        bounds: Optional[torch.Tensor] = None,
+        ) -> None:
+        default_bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
         super().__init__(
             name="linear_1d",
             dim=1,
-            bounds=bounds,
+            bounds=SyntheticBenchmark.resolve_bounds(default_bounds, bounds),
             default_noise_std=noise_std,
         )
 
@@ -81,17 +86,22 @@ class Exponential1D(SyntheticBenchmark):
     still introduces a cusp at the unique target point.
     """
 
-    def __init__(self, noise_std: float = 0.0, rate: float = 3.0) -> None:
+    def __init__(
+        self,
+        noise_std: float = 0.0,
+        rate: float = 3.0,
+        bounds: Optional[torch.Tensor] = None,
+        ) -> None:
         if rate <= 0:
             raise ValueError(f"rate must be positive, got {rate}.")
 
         self.rate = float(rate)
 
-        bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+        default_bounds = torch.tensor([[-20.0], [20.0]], dtype=torch.double)
         super().__init__(
             name="exponential_1d",
             dim=1,
-            bounds=bounds,
+            bounds=SyntheticBenchmark.resolve_bounds(default_bounds, bounds),
             default_noise_std=noise_std,
         )
 
@@ -127,16 +137,20 @@ class GaussianTrap1D(SyntheticBenchmark):
         can be attracted by a local near-target valley of the transformed objective.
         """
 
-        def __init__(self, noise_std: float = 0.0) -> None:
+        def __init__(
+            self,
+            noise_std: float = 0.0,
+            bounds: Optional[torch.Tensor] = None,
+            ) -> None:
             self.amplitude = 0.25
             self.center = 0.45
             self.width = 0.08
 
-            bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+            default_bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
             super().__init__(
                 name="gaussian_trap_1d",
                 dim=1,
-                bounds=bounds,
+                bounds=SyntheticBenchmark.resolve_bounds(default_bounds, bounds),
                 default_noise_std=noise_std,
             )
 
@@ -166,16 +180,20 @@ class DampedOscillatoryTrap1D(SyntheticBenchmark):
     has several local valleys, which can mislead a GP fitted directly on g.
     """
 
-    def __init__(self, noise_std: float = 0.0) -> None:
+    def __init__(
+        self,
+        noise_std: float = 0.0,
+        bounds: Optional[torch.Tensor] = None,
+        ) -> None:
         self.amplitude = 0.22
         self.decay = 2.5
         self.frequency = 5.0
 
-        bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+        default_bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
         super().__init__(
             name="damped_oscillatory_trap_1d",
             dim=1,
-            bounds=bounds,
+            bounds=SyntheticBenchmark.resolve_bounds(default_bounds, bounds),
             default_noise_std=noise_std,
         )
 
@@ -215,12 +233,16 @@ class SineTrend1D(SyntheticBenchmark):
         noise_std: Observation noise standard deviation.
     """
 
-    def __init__(self, noise_std: float = DEFAULT_NOISE_STD_SINE_TREND1D) -> None:
-        bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+    def __init__(
+        self,
+        noise_std: float = DEFAULT_NOISE_STD_SINE_TREND1D,
+        bounds: Optional[torch.Tensor] = None,
+        ) -> None:
+        default_bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
         super().__init__(
             name="sine_trend_1d",
             dim=1,
-            bounds=bounds,
+            bounds=SyntheticBenchmark.resolve_bounds(default_bounds, bounds),
             default_noise_std=noise_std,
         )
 
@@ -264,12 +286,16 @@ class Forrester1D(SyntheticBenchmark):
         noise_std: Observation noise standard deviation.
     """
 
-    def __init__(self, noise_std: float = DEFAULT_NOISE_STD_FORRESTER1D) -> None:
-        bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+    def __init__(
+        self,
+        noise_std: float = DEFAULT_NOISE_STD_FORRESTER1D,
+        bounds: Optional[torch.Tensor] = None,
+        ) -> None:
+        default_bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
         super().__init__(
             name="forrester_1d",
             dim=1,
-            bounds=bounds,
+            bounds=SyntheticBenchmark.resolve_bounds(default_bounds, bounds),
             default_noise_std=noise_std,
         )
 
@@ -317,14 +343,18 @@ class Branin2D(SyntheticBenchmark):
     _s: float = 10.0
     _t: float = 1.0 / (8.0 * math.pi)
 
-    def __init__(self, noise_std: float = DEFAULT_NOISE_STD_BRANIN) -> None:
-        bounds = torch.tensor(
+    def __init__(
+        self,
+        noise_std: float = DEFAULT_NOISE_STD_BRANIN,
+        bounds: Optional[torch.Tensor] = None,
+        ) -> None:
+        default_bounds = torch.tensor(
             [[-5.0, 0.0], [10.0, 15.0]], dtype=torch.double
         )
         super().__init__(
             name="branin_2d",
             dim=2,
-            bounds=bounds,
+            bounds=SyntheticBenchmark.resolve_bounds(default_bounds, bounds),
             default_noise_std=noise_std,
         )
 
@@ -382,13 +412,17 @@ class Hartmann6D(SyntheticBenchmark):
         noise_std: Observation noise standard deviation.
     """
 
-    def __init__(self, noise_std: float = DEFAULT_NOISE_STD_HARTMANN6) -> None:
-        bounds = torch.zeros(2, 6, dtype=torch.double)
-        bounds[1] = 1.0
+    def __init__(
+        self,
+        noise_std: float = DEFAULT_NOISE_STD_HARTMANN6,
+        bounds: Optional[torch.Tensor] = None,
+        ) -> None:
+        default_bounds = torch.zeros(2, 6, dtype=torch.double)
+        default_bounds[1] = 1.0
         super().__init__(
             name="hartmann_6d",
             dim=6,
-            bounds=bounds,
+            bounds=SyntheticBenchmark.resolve_bounds(default_bounds, bounds),
             default_noise_std=noise_std,)
 
     def f(self, X: torch.Tensor) -> torch.Tensor:

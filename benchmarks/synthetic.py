@@ -46,6 +46,24 @@ class SyntheticBenchmark(ProblemSpec):
             default_noise_std=default_noise_std,
         )
 
+    @staticmethod
+    def resolve_bounds(
+        default_bounds: torch.Tensor,
+        override: Optional[Any],
+        ) -> torch.Tensor:
+        """Return the bounds to use given a benchmark default and an optional override.
+
+        If ``override`` is ``None``, ``default_bounds`` is returned (cast to double).
+        Otherwise ``override`` is converted to a ``torch.double`` tensor of shape
+        ``(2, dim)``.  Full validation (shape, ``lower < upper``, dtype) is performed
+        downstream by :class:`~common.problems.ProblemSpec`.
+        """
+        if override is None:
+            return default_bounds.to(torch.double)
+        if isinstance(override, torch.Tensor):
+            return override.to(torch.double)
+        return torch.as_tensor(override, dtype=torch.double)
+
     # ------------------------------------------------------------------
     # Noiseless function (subclasses must implement)
     # ------------------------------------------------------------------
