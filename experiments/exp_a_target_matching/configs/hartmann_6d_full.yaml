@@ -1,7 +1,7 @@
 # Full configuration for Experiment A on the 6-D Hartmann benchmark.
 
 experiment:            exp_a_target_matching
-tag:                   hartmann_6d_noiseless_100seeds
+tag:                   hartmann_6d_noiseless_Tminus2p5_beta8_100seeds
 benchmark:             hartmann_6d
 
 seeds:                 [1,2,3,4,5,6,7,8,9,10,
@@ -15,8 +15,8 @@ seeds:                 [1,2,3,4,5,6,7,8,9,10,
                         81,82,83,84,85,86,87,88,89,90,
                         91,92,93,94,95,96,97,98,99,100]
 
-target:                -2.0
-beta:                  2.0
+target:                -2.5
+beta:                  8.0
 
 initial_design_size:   12
 budget:                50
@@ -35,11 +35,16 @@ epsilon:               0.05
 failure_threshold:     0.20
 
 test_grid:
-  n_test:              4096
-  seed:                123
-  calibration_every:   5
-  m_test_joint_distrib: 64
-  joint_nlpd_jitter:   1.0e-6
+  n_test:                 4096
+  seed:                   123
+  calibration_every:      5
+
+  n_test_near_target:     512
+  near_target_seed:       124
+
+  m_test_joint_distrib:      64
+  m_test_joint_near_target:  64
+  joint_nlpd_jitter:         1.0e-6
 
 near_target_epsilon:   0.10
 
@@ -50,11 +55,9 @@ calibration:
   store_predictions:   true
 
 aggregate:
-  # Band type is set per curve family (no single global value).
-  # Each is one of: pointwise | uniform | both
-  convergence_band_type:          pointwise   # performance / regret curves
-  calibration_band_type:          pointwise   # nlpd, coverage, pit, joint posterior
-  residual_band_type:             uniform     # standardized-residual curves
+  convergence_band_type:          pointwise
+  calibration_band_type:          pointwise
+  residual_band_type:             uniform
   n_bootstrap:                    10000
   confidence:                     0.95
   aggregate_calibration_curves:   true

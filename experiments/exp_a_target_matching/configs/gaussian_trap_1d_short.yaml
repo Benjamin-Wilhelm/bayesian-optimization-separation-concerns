@@ -20,7 +20,7 @@ target:                0.38
 beta:                  2.0
 
 initial_design_size:   1
-budget:                10
+budget:                50
 
 noise_std:             0.0
 
@@ -36,11 +36,16 @@ epsilon:               0.02
 failure_threshold:     0.015
 
 test_grid:
-  n_test:              2048
-  seed:                123
-  calibration_every:   1
-  m_test_joint_distrib: 64
-  joint_nlpd_jitter:   1.0e-6
+  n_test:                 2048
+  seed:                   123
+  calibration_every:      1
+
+  n_test_near_target:     512
+  near_target_seed:       124
+
+  m_test_joint_distrib:      64
+  m_test_joint_near_target:  64
+  joint_nlpd_jitter:         1.0e-6
 
 near_target_epsilon:   0.05
 

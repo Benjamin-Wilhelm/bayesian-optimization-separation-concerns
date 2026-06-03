@@ -39,14 +39,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from benchmarks import (
     BENCHMARK_REGISTRY,
-    SyntheticBenchmark,
     build_benchmark,
-    build_benchmark_from_metadata,
 )
 from common.diagnostics import (
-    calibration_summary,
-    joint_gaussian_nlpd,
-    near_target_calibration_summary,
+    build_calibration_report_dict,
 )
 from common.logging import RunLogger
 from common.metrics import (
@@ -252,71 +248,13 @@ def _y_true_for_method(
     raise ValueError(f"Unknown train_label '{train_label}'.")
 
 
-def _compute_near_target_joint_nlpd(
-    *,
-    model: Any,
-    X_near: torch.Tensor,
-    f_near: torch.Tensor,
-    target: float,
-    train_label: str,
-    jitter: float,
-    near_total: int,
-    snapshot_iter: int,
-    method_name: str,
-) -> dict[str, Any]:
-    """Joint Gaussian NLPD on a pre-selected near-target subset.
-
-    Mirrors the global joint-NLPD calculation in :func:`_calibration_reports`
-    but on the near-target slice.  Returns a dict whose keys are merged into
-    the ``near_target`` calibration block via ``dict.update``::
-
-        joint_n_test, joint_total_count, joint_nlpd,
-        joint_mahalanobis_sq, joint_logdet, joint_jitter
-
-    Numerical failures are absorbed: ``joint_nlpd`` is set to ``nan`` and an
-    ``joint_error`` key carries the exception message, matching the convention
-    used by the global joint path.
-    """
-    out: dict[str, Any] = {
-        "joint_n_test": int(X_near.shape[0]),
-        "joint_total_count": int(near_total),
-        "joint_jitter": float(jitter),
-    }
-    try:
-        with torch.no_grad():
-            posterior = model.posterior(X_near)
-            joint_mean = posterior.mean.squeeze(-1)
-            joint_cov = posterior.mvn.covariance_matrix
-        y_true = _y_true_for_method(train_label, f_near, target)
-        joint = joint_gaussian_nlpd(
-            y_true=y_true.cpu().numpy(),
-            mean=joint_mean.cpu().numpy(),
-            covariance=joint_cov.cpu().numpy(),
-            jitter=float(jitter),
-        )
-        out["joint_nlpd"] = float(joint.get("nlpd_joint", float("nan")))
-        out["joint_mahalanobis_sq"] = float(joint.get("mahalanobis_sq", float("nan")))
-        out["joint_logdet"] = float(joint.get("logdet", float("nan")))
-        if "error" in joint:
-            out["joint_error"] = str(joint["error"])
-    except Exception as exc:  # pragma: no cover — diagnostic resilience
-        logger.warning(
-            "Near-target joint NLPD failed at iter %d for method '%s': %s",
-            snapshot_iter, method_name, exc,
-        )
-        out["joint_nlpd"] = float("nan")
-        out["joint_mahalanobis_sq"] = float("nan")
-        out["joint_logdet"] = float("nan")
-        out["joint_error"] = str(exc)
-    return out
-
-
 def _calibration_reports(
     method: MethodTrajectory,
     initial_design: InitialDesign,
-    problem: SyntheticBenchmark,
-    X_test: torch.Tensor,
-    f_test: torch.Tensor,
+    X_global: torch.Tensor,
+    f_global: torch.Tensor,
+    X_near: Optional[torch.Tensor],
+    f_near: Optional[torch.Tensor],
     target: float,
     near_target_epsilon: Optional[float],
     device: torch.device,
@@ -331,58 +269,28 @@ def _calibration_reports(
 ) -> list[CalibrationReport]:
     """Held-out calibration at selected GP snapshots.
 
-    Rebuilds the trained GP via load_state_dict, evaluates the posterior on
-    the test grid, and computes calibration diagnostics against the appropriate
-    ground truth: f for RIGHT, |f - T| for WRONG.
-
-    When ``compute_joint`` is True and ``m_test_joint_distrib`` is a positive
-    integer, a global joint Gaussian NLPD is computed on the first
-    ``m_test_joint_distrib`` points of ``X_test``.  Only scalars are stored
-    (never the covariance itself); see :func:`joint_gaussian_nlpd`.
-
-    When ``m_test_joint_near_target`` is also a positive integer, an
-    additional joint Gaussian NLPD restricted to the near-target slice
-    (``|f_test - target| <= near_target_epsilon``) is computed on the first
-    ``m_test_joint_near_target`` such points (deterministic, shared across
-    methods and iterations).  Results are stored under the ``joint_*`` keys
-    of the ``near_target`` calibration dict.
+    Orchestration only: at each captured iteration, rebuild the GP from its
+    snapshot, then delegate to
+    :func:`common.diagnostics.build_calibration_report_dict` for all
+    diagnostic computations (marginal, near-target, joint).  The two grids
+    ``(X_global, f_global)`` and ``(X_near, f_near)`` are shared across
+    every method and iteration so RIGHT and WRONG are compared on exactly
+    the same points.
     """
-    reports = []
     if not method.model_snapshots:
         raise ValueError(f"No model snapshots for method '{method.method_name}'.")
 
-    do_joint = (
-        compute_joint
-        and m_test_joint_distrib is not None
-        and int(m_test_joint_distrib) > 0
+    # Pre-compute the appropriate ground-truth tensors once per method.
+    y_true_global = _y_true_for_method(
+        method.train_label, f_global.squeeze(-1), target
     )
-    if do_joint:
-        m_joint = min(int(m_test_joint_distrib), int(X_test.shape[0]))
-        X_joint = X_test[:m_joint]
-        f_joint = f_test.squeeze(-1)[:m_joint]
+    y_true_near = (
+        _y_true_for_method(method.train_label, f_near, target)
+        if f_near is not None
+        else None
+    )
 
-    # Pre-compute the near-target joint subset once: same indices, same order,
-    # for every method and every snapshot iteration.
-    near_joint_X: Optional[torch.Tensor] = None
-    near_joint_f: Optional[torch.Tensor] = None
-    near_joint_total: int = 0
-    if (
-        compute_near_target
-        and near_target_epsilon is not None
-        and m_test_joint_near_target is not None
-        and int(m_test_joint_near_target) > 0
-    ):
-        flat_f = f_test.squeeze(-1)
-        mask = (flat_f - target).abs() <= float(near_target_epsilon)
-        all_idx = torch.nonzero(mask, as_tuple=False).squeeze(-1)
-        near_joint_total = int(all_idx.numel())
-        k = min(int(m_test_joint_near_target), near_joint_total)
-        # A joint distribution requires at least 2 points.
-        if k >= 2:
-            sel = all_idx[:k]
-            near_joint_X = X_test[sel]
-            near_joint_f = flat_f[sel]
-
+    reports: list[CalibrationReport] = []
     for snapshot in method.model_snapshots:
         if snapshot.iteration % every != 0 and snapshot != method.model_snapshots[-1]:
             continue
@@ -395,90 +303,35 @@ def _calibration_reports(
             target=target,
             device=device,
         )
-
         model = _rebuild_gp_at_snapshot(snapshot, train_X, train_Y)
 
-        with torch.no_grad():
-            posterior = model.posterior(X_test)
-            mean = posterior.mean.squeeze(-1)
-            var = posterior.variance.clamp_min(1e-12).squeeze(-1)
-            std = var.sqrt()
+        artifacts = build_calibration_report_dict(
+            model=model,
+            X_global=X_global,
+            y_true_global=y_true_global,
+            X_near=X_near,
+            y_true_near=y_true_near,
+            near_target_epsilon=near_target_epsilon,
+            compute_global=compute_global,
+            compute_near_target=compute_near_target,
+            compute_joint=compute_joint,
+            m_test_joint_distrib=m_test_joint_distrib,
+            m_test_joint_near_target=m_test_joint_near_target,
+            joint_nlpd_jitter=joint_nlpd_jitter,
+            store_predictions=store_predictions,
+        )
 
-        y_true_full = _y_true_for_method(method.train_label, f_test.squeeze(-1), target)
-
-        grid_summary: dict[str, Any] = {}
-        if compute_global:
-            grid_summary = calibration_summary(
-                y_true=y_true_full.cpu().numpy(),
-                mean=mean.cpu().numpy(),
-                std=std.cpu().numpy(),
-            )
-
-        near_target_summary: Optional[dict[str, Any]] = None
-        if compute_near_target and near_target_epsilon is not None:
-            near_target_summary = near_target_calibration_summary(
-                f_true=f_test.squeeze(-1).cpu().numpy(),
-                mean=mean.cpu().numpy(),
-                std=std.cpu().numpy(),
-                target=target,
-                epsilon=near_target_epsilon,
-            )
-            if near_joint_X is not None:
-                near_target_summary.update(
-                    _compute_near_target_joint_nlpd(
-                        model=model,
-                        X_near=near_joint_X,
-                        f_near=near_joint_f,
-                        target=target,
-                        train_label=method.train_label,
-                        jitter=float(joint_nlpd_jitter),
-                        near_total=near_joint_total,
-                        snapshot_iter=snapshot.iteration,
-                        method_name=method.method_name,
-                    )
-                )
-
-        joint_post: Optional[dict[str, Any]] = None
-        if do_joint:
-            try:
-                with torch.no_grad():
-                    joint_posterior = model.posterior(X_joint)
-                    joint_mean = joint_posterior.mean.squeeze(-1)
-                    joint_cov = joint_posterior.mvn.covariance_matrix
-                y_joint = _y_true_for_method(method.train_label, f_joint, target)
-                joint_post = joint_gaussian_nlpd(
-                    y_true=y_joint.cpu().numpy(),
-                    mean=joint_mean.cpu().numpy(),
-                    covariance=joint_cov.cpu().numpy(),
-                    jitter=float(joint_nlpd_jitter),
-                )
-            except Exception as exc:  # pragma: no cover — diagnostic resilience
-                logger.warning(
-                    "Joint NLPD failed at iter %d for method '%s': %s",
-                    snapshot.iteration, method.method_name, exc,
-                )
-                joint_post = {
-                    "m_test": int(X_joint.shape[0]),
-                    "jitter": float(joint_nlpd_jitter),
-                    "nlpd_joint": float("nan"),
-                    "mahalanobis_sq": float("nan"),
-                    "logdet": float("nan"),
-                    "error": str(exc),
-                }
-
-        predictions: Optional[CalibrationPredictionGrid] = None
-        if store_predictions:
-            predictions = CalibrationPredictionGrid(
-                posterior_mean=mean.detach().cpu().tolist(),
-                posterior_std=std.detach().cpu().tolist(),
-            )
-
+        predictions = (
+            CalibrationPredictionGrid(**artifacts["predictions"])
+            if artifacts["predictions"] is not None
+            else None
+        )
         reports.append(
             CalibrationReport(
                 iteration_index=snapshot.iteration,
-                global_calibration=grid_summary,
-                near_target=near_target_summary,
-                joint_posterior=joint_post,
+                global_calibration=artifacts["global_calibration"],
+                near_target=artifacts["near_target"],
+                joint_posterior=artifacts["joint_posterior"],
                 predictions=predictions,
             )
         )
@@ -556,6 +409,21 @@ def _process_one_seed(
     compute_joint = bool(calibration_cfg.get("compute_joint", False))
     store_predictions = bool(calibration_cfg.get("store_predictions", True))
 
+    # Dedicated near-target grid configuration with defaults that preserve
+    # the spirit of older configs (same size as the global grid, distinct
+    # Sobol stream).
+    do_near_target = compute_near_target and near_target_epsilon is not None
+    n_test_near_target = (
+        int(test_grid_cfg["n_test_near_target"])
+        if test_grid_cfg.get("n_test_near_target") is not None
+        else (n_test if do_near_target else None)
+    )
+    near_target_seed = (
+        int(test_grid_cfg["near_target_seed"])
+        if test_grid_cfg.get("near_target_seed") is not None
+        else (test_grid_seed + 1 if do_near_target else None)
+    )
+
     test_grid = TestGrid(
         n_test=n_test,
         seed=test_grid_seed,
@@ -565,12 +433,12 @@ def _process_one_seed(
             else None
         ),
         near_target_mode=(
-            "mask_on_global_grid"
-            if near_target_epsilon is not None
+            "benchmark_near_target_test_set"
+            if do_near_target
             else None
         ),
-        n_test_near_target=None,
-        near_target_seed=None,
+        n_test_near_target=n_test_near_target,
+        near_target_seed=near_target_seed,
         near_target_pool_size=None,
         m_test_joint_distrib=m_test_joint_distrib,
         m_test_joint_near_target=m_test_joint_near_target,
@@ -578,6 +446,19 @@ def _process_one_seed(
     # Held-out grid is deterministic from (benchmark, n_test, seed).
     X_test = problem.test_set(n=n_test, seed=test_grid_seed).to(device)
     f_test = problem.f(X_test)
+
+    # Dedicated near-target grid: produced once by the benchmark itself,
+    # shared verbatim across all methods, snapshots and joint diagnostics.
+    X_near: Optional[torch.Tensor] = None
+    f_near: Optional[torch.Tensor] = None
+    if do_near_target and n_test_near_target is not None and n_test_near_target > 0:
+        X_near = problem.near_target_test_set(
+            target=float(target),
+            epsilon=float(near_target_epsilon),
+            n=int(n_test_near_target),
+            seed=int(near_target_seed),
+        ).to(device)
+        f_near = problem.f(X_near).squeeze(-1)
 
     # Oracle.  Synthetic benchmarks can override; default returns None,
     # in which case we treat the simple regret as min_t |f - T| - 0.
@@ -599,9 +480,10 @@ def _process_one_seed(
         calibration = _calibration_reports(
             method=method,
             initial_design=raw.initial_design,
-            problem=problem,
-            X_test=X_test,
-            f_test=f_test,
+            X_global=X_test,
+            f_global=f_test,
+            X_near=X_near,
+            f_near=f_near,
             target=target,
             near_target_epsilon=(
                 float(near_target_epsilon) if near_target_epsilon is not None

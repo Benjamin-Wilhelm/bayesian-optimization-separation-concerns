@@ -1,4 +1,4 @@
-```yaml
+
 experiment:            exp_a_target_matching
 tag:                   branin_2d_single_ring_noiseless_100seeds
 benchmark:             branin_2d
@@ -62,4 +62,4 @@ aggregate:
   confidence:                     0.95
   aggregate_calibration_curves:   true
   aggregate_instantaneous_curves: true
-```
+
