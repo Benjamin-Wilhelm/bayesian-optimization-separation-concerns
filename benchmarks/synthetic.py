@@ -236,3 +236,100 @@ class SyntheticBenchmark(ProblemSpec):
         X_unit = sobol.draw(n).to(torch.double)
         lb, ub = self.bounds[0], self.bounds[1]
         return lb + (ub - lb) * X_unit
+
+    # ------------------------------------------------------------------
+    # Near-target grid
+    # ------------------------------------------------------------------
+
+    # Generic rejection-sampling parameters.  Subclasses may override
+    # ``_NEAR_TARGET_BATCH`` for benchmarks where small batches are too
+    # inefficient (e.g. tight epsilon in high dimension).
+    _NEAR_TARGET_BATCH: int = 4096
+    _NEAR_TARGET_MAX_CANDIDATES: int = 4_000_000
+
+    def near_target_test_set(
+        self,
+        *,
+        target: float,
+        epsilon: float,
+        n: int,
+        seed: int,
+    ) -> torch.Tensor:
+        r"""Generate exactly ``n`` test points satisfying ``|f(x) - T| <= eps``.
+
+        Strict contract::
+
+            X_near = problem.near_target_test_set(target=T, epsilon=eps,
+                                                  n=n, seed=s)
+            assert X_near.shape == (n, problem.dim)
+            assert torch.all(torch.abs(problem.f(X_near).squeeze(-1) - T) <= eps)
+
+        The generic implementation runs deterministic rejection sampling on
+        a single continuous Sobol stream over ``self.bounds``: draw a batch,
+        evaluate ``self.f``, keep candidates inside the near-target band,
+        repeat until ``n`` valid points have been accumulated.
+
+        Subclasses may override this method when rejection on the unit cube
+        is too inefficient (e.g. :class:`Hartmann6D` with a tight ``epsilon``
+        around a deep target) — in that case a local-perturbation strategy
+        around level-set anchors is typically faster.
+
+        Args:
+            target: Target value ``T``.
+            epsilon: Strict near-target tolerance; must be positive.
+            n: Required number of returned points.
+            seed: Sobol scramble seed; fully determines the output.
+
+        Returns:
+            Tensor of shape ``(n, self.dim)`` of dtype ``torch.double``.
+
+        Raises:
+            ValueError: ``n < 0`` or ``epsilon <= 0``.
+            RuntimeError: Safety cap on the number of Sobol candidates
+                (``_NEAR_TARGET_MAX_CANDIDATES``) was reached without
+                collecting ``n`` valid points.  Typically signals a target
+                outside the range of ``f`` rather than a transient pool
+                shortage; callers should re-validate the configuration or
+                provide a benchmark-specific override.
+        """
+        if n < 0:
+            raise ValueError(f"n must be non-negative, got {n}.")
+        if epsilon <= 0:
+            raise ValueError(f"epsilon must be strictly positive, got {epsilon}.")
+        if n == 0:
+            return torch.empty((0, self.dim), dtype=torch.double)
+
+        sobol = torch.quasirandom.SobolEngine(
+            dimension=self.dim, scramble=True, seed=seed
+        )
+        lb, ub = self.bounds[0], self.bounds[1]
+
+        collected: list[torch.Tensor] = []
+        n_collected = 0
+        n_drawn = 0
+        batch = max(int(self._NEAR_TARGET_BATCH), 1)
+        max_drawn = max(int(self._NEAR_TARGET_MAX_CANDIDATES), batch)
+
+        while n_collected < n:
+            X_unit = sobol.draw(batch).to(torch.double)
+            X = lb + (ub - lb) * X_unit
+            f_vals = self.f(X).squeeze(-1)
+            mask = (f_vals - target).abs() <= epsilon
+            if mask.any():
+                accepted = X[mask]
+                collected.append(accepted)
+                n_collected += int(accepted.shape[0])
+            n_drawn += batch
+            if n_drawn >= max_drawn and n_collected < n:
+                raise RuntimeError(
+                    f"near_target_test_set: drew {n_drawn} Sobol candidates "
+                    f"without collecting {n} points satisfying "
+                    f"|f - {target}| <= {epsilon} on '{self.name}'. "
+                    "This usually means the target lies outside the range "
+                    "of f or the band is too thin for the generic rejection "
+                    "sampler; consider validating the configuration or "
+                    "providing a benchmark-specific override."
+                )
+
+        pool = torch.cat(collected, dim=0)
+        return pool[:n]

@@ -36,9 +36,10 @@ Dictionary outputs contain only JSON-serialisable values (``float``, ``int``).
 from __future__ import annotations
 
 import math
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
+import torch
 
 # ---------------------------------------------------------------------------
 # Optional scipy
@@ -599,3 +600,185 @@ def ks_test_uniform(u: ArrayLike) -> dict:
     return {"statistic": float(res.statistic), "p_value": float(res.pvalue),
             "scipy_available": True}
 
+
+# ---------------------------------------------------------------------------
+# Posterior helpers (model-aware)
+# ---------------------------------------------------------------------------
+
+def posterior_predictions(
+    model: Any,
+    X: torch.Tensor,
+    variance_floor: float = 1e-12,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return ``(mean, std)`` of a GP posterior on ``X``.
+
+    Marginal predictions only; no covariance is materialised.  ``std`` is
+    obtained from the clamped variance to avoid sub-zero values from
+    numerical noise.
+    """
+    with torch.no_grad():
+        posterior = model.posterior(X)
+        mean = posterior.mean.squeeze(-1)
+        var = posterior.variance.clamp_min(float(variance_floor)).squeeze(-1)
+    return mean, var.sqrt()
+
+
+def posterior_joint_calibration_summary(
+    *,
+    model: Any,
+    X: torch.Tensor,
+    y_true: ArrayLike,
+    jitter: float = 1e-6,
+) -> dict:
+    """Joint Gaussian NLPD for one GP on one held-out subset.
+
+    Materialises the full posterior covariance over ``X``, then delegates the
+    Cholesky-stabilised NLPD calculation to :func:`joint_gaussian_nlpd`.  The
+    returned dict is the same one ``joint_gaussian_nlpd`` produces (``m_test``,
+    ``jitter``, ``nlpd_joint``, ``mahalanobis_sq``, ``logdet``, optional
+    ``error``), so global and near-target joint paths share one schema.
+    """
+    out: dict[str, Any] = {
+        "m_test": int(X.shape[0]),
+        "jitter": float(jitter),
+    }
+    try:
+        with torch.no_grad():
+            posterior = model.posterior(X)
+            mean = posterior.mean.squeeze(-1)
+            cov = posterior.mvn.covariance_matrix
+        joint = joint_gaussian_nlpd(
+            y_true=y_true,
+            mean=mean.cpu().numpy(),
+            covariance=cov.cpu().numpy(),
+            jitter=float(jitter),
+        )
+        out["nlpd_joint"] = joint.get("nlpd_joint", float("nan"))
+        out["mahalanobis_sq"] = joint.get("mahalanobis_sq", float("nan"))
+        out["logdet"] = joint.get("logdet", float("nan"))
+        if "error" in joint:
+            out["error"] = str(joint["error"])
+    except Exception as exc:  # pragma: no cover — diagnostic resilience
+        out["nlpd_joint"] = float("nan")
+        out["mahalanobis_sq"] = float("nan")
+        out["logdet"] = float("nan")
+        out["error"] = str(exc)
+    return out
+
+
+def build_calibration_report_dict(
+    *,
+    model: Any,
+    X_global: torch.Tensor,
+    y_true_global: ArrayLike,
+    X_near: Optional[torch.Tensor] = None,
+    y_true_near: Optional[ArrayLike] = None,
+    near_target_epsilon: Optional[float] = None,
+    compute_global: bool = True,
+    compute_near_target: bool = True,
+    compute_joint: bool = False,
+    m_test_joint_distrib: Optional[int] = None,
+    m_test_joint_near_target: Optional[int] = None,
+    joint_nlpd_jitter: float = 1e-6,
+    store_predictions: bool = True,
+    level: float = 0.95,
+    beta: float = 2.0,
+) -> dict[str, Any]:
+    """Compute all calibration diagnostics for one GP at one snapshot.
+
+    Returns a dict whose keys map onto :class:`data.processed.CalibrationReport`
+    fields::
+
+        {
+          "global_calibration": dict,        # from calibration_summary on X_global
+          "near_target":        dict | None, # from calibration_summary on X_near + epsilon/n_test + joint_* keys
+          "joint_posterior":    dict | None, # from posterior_joint_calibration_summary on X_global[:m_glob]
+          "predictions":        dict | None, # posterior_mean/posterior_std on X_global
+        }
+
+    The caller is responsible for passing the correct ``y_true`` for each
+    grid: ``f(X)`` for the RIGHT method, ``|f(X) - T|`` for WRONG.  This keeps
+    decision-specific transforms out of :mod:`common.diagnostics`.
+    """
+    mean_global, std_global = posterior_predictions(model, X_global)
+
+    global_calib: dict[str, Any] = {}
+    if compute_global:
+        y_global_np = _to_numpy_1d(y_true_global, "y_true_global")
+        global_calib = calibration_summary(
+            y_true=y_global_np,
+            mean=mean_global.cpu().numpy(),
+            std=std_global.cpu().numpy(),
+            level=level,
+            beta=beta,
+        )
+
+    near_calib: Optional[dict[str, Any]] = None
+    if compute_near_target and X_near is not None and y_true_near is not None:
+        mean_near, std_near = posterior_predictions(model, X_near)
+        y_near_np = _to_numpy_1d(y_true_near, "y_true_near")
+        near_calib = calibration_summary(
+            y_true=y_near_np,
+            mean=mean_near.cpu().numpy(),
+            std=std_near.cpu().numpy(),
+            level=level,
+            beta=beta,
+        )
+        near_calib["n_test"] = int(X_near.shape[0])
+        near_calib["near_target_count"] = int(X_near.shape[0])
+        near_calib["epsilon"] = (
+            float(near_target_epsilon) if near_target_epsilon is not None else None
+        )
+
+    joint_post: Optional[dict[str, Any]] = None
+    if compute_joint and m_test_joint_distrib is not None and int(m_test_joint_distrib) > 0:
+        m = min(int(m_test_joint_distrib), int(X_global.shape[0]))
+        y_global_np = _to_numpy_1d(y_true_global, "y_true_global")
+        joint_post = posterior_joint_calibration_summary(
+            model=model,
+            X=X_global[:m],
+            y_true=y_global_np[:m],
+            jitter=joint_nlpd_jitter,
+        )
+
+    if (
+        compute_joint
+        and near_calib is not None
+        and X_near is not None
+        and m_test_joint_near_target is not None
+        and int(m_test_joint_near_target) > 0
+    ):
+        m_near = min(int(m_test_joint_near_target), int(X_near.shape[0]))
+        if m_near >= 2:
+            y_near_np = _to_numpy_1d(y_true_near, "y_true_near")
+            near_joint = posterior_joint_calibration_summary(
+                model=model,
+                X=X_near[:m_near],
+                y_true=y_near_np[:m_near],
+                jitter=joint_nlpd_jitter,
+            )
+            near_calib["joint_nlpd"] = near_joint.get("nlpd_joint", float("nan"))
+            near_calib["joint_mahalanobis_sq"] = near_joint.get(
+                "mahalanobis_sq", float("nan")
+            )
+            near_calib["joint_logdet"] = near_joint.get("logdet", float("nan"))
+            near_calib["joint_n_test"] = int(near_joint.get("m_test", m_near))
+            near_calib["joint_jitter"] = float(
+                near_joint.get("jitter", joint_nlpd_jitter)
+            )
+            if "error" in near_joint:
+                near_calib["joint_error"] = str(near_joint["error"])
+
+    predictions: Optional[dict[str, Any]] = None
+    if store_predictions:
+        predictions = {
+            "posterior_mean": mean_global.detach().cpu().tolist(),
+            "posterior_std":  std_global.detach().cpu().tolist(),
+        }
+
+    return {
+        "global_calibration": global_calib,
+        "near_target":        near_calib,
+        "joint_posterior":    joint_post,
+        "predictions":        predictions,
+    }
