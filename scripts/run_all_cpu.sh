@@ -23,8 +23,11 @@ CONFIGS=(
   #"linear_1d_short.yaml"
   #"exponential_1d_short.yaml"
   #"branin_2d_short.yaml"
-  "hartmann_6d_full.yaml"
+  #"hartmann_6d_full.yaml"
   #"gaussian_trap_1d_short.yaml"
+  #"gaussian_trap_1d_short_thin.yaml"
+  "gaussian_trap_1d_short_shifted.yaml"
+  #"gaussian_trap_1d_short_deep.yaml"
 )
 
 run_one() {

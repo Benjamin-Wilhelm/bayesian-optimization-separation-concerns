@@ -54,6 +54,9 @@ mapfile -t matches < <(
       -o -name "*damped_oscillatory_trap_1d_short" \
       -o -name "*hartmann_6d_full" \
       -o -name "*branin_2d_short" \
+      -o -name "*gaussian_trap_1d_short_thin" \
+      -o -name "*gaussian_trap_1d_short_shifted" \
+      -o -name "*gaussian_trap_1d_short_deep" \
     \) \
     -printf "%T@ %p\n" \
     | sort -nr \
