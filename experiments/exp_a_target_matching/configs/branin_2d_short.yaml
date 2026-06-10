@@ -42,6 +42,7 @@ test_grid:
   seed:                123
   calibration_every:   5
   m_test_joint_distrib: 64
+  m_test_joint_near_target: 64
   joint_nlpd_jitter:   1.0e-6
 
 near_target_epsilon:   0.50
