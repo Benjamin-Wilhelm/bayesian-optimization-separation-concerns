@@ -452,6 +452,81 @@ class Branin2D(SyntheticBenchmark):
 
 
 # ---------------------------------------------------------------------------
+# Hartmann 3-D
+# ---------------------------------------------------------------------------
+
+DEFAULT_NOISE_STD_HARTMANN3: float = 0.05
+
+# Module-level constants to avoid re-allocation on each forward call.
+_H3_ALPHA = torch.tensor([1.0, 1.2, 3.0, 3.2], dtype=torch.double)
+
+_H3_A = torch.tensor(
+    [
+        [3.0, 10.0, 30.0],
+        [0.1, 10.0, 35.0],
+        [3.0, 10.0, 30.0],
+        [0.1, 10.0, 35.0],
+    ],
+    dtype=torch.double,
+)
+
+_H3_P = 1e-4 * torch.tensor(
+    [
+        [3689.0, 1170.0, 2673.0],
+        [4699.0, 4387.0, 7470.0],
+        [1091.0, 8732.0, 5547.0],
+        [ 381.0, 5743.0, 8828.0],
+    ],
+    dtype=torch.double,
+)
+
+
+class Hartmann3D(SyntheticBenchmark):
+    """3-D Hartmann benchmark function.
+
+    - 3-dimensional multi-modal function on [0, 1]^3
+    - Four local minima
+    - Global minimum value: f* ≈ -3.86278
+    - Global minimizer approximately:
+        x* ≈ (0.114614, 0.555649, 0.852547)
+
+    Definition:
+        f(x) = - sum_{i=1}^4 alpha_i
+                exp( - sum_{j=1}^3 A_ij (x_j - P_ij)^2 )
+
+    Args:
+        noise_std: Observation noise standard deviation.
+    """
+
+    def __init__(
+        self,
+        noise_std: float = DEFAULT_NOISE_STD_HARTMANN3,
+        bounds: Optional[torch.Tensor] = None,
+        ) -> None:
+        default_bounds = torch.zeros(2, 3, dtype=torch.double)
+        default_bounds[1] = 1.0
+        super().__init__(
+            name="hartmann_3d",
+            dim=3,
+            bounds=SyntheticBenchmark.resolve_bounds(default_bounds, bounds),
+            default_noise_std=noise_std,)
+
+    def f(self, X: torch.Tensor) -> torch.Tensor:
+        # Move constants to the same device as X.
+        alpha = _H3_ALPHA.to(X.device)
+        A = _H3_A.to(X.device)
+        P = _H3_P.to(X.device)
+
+        # X: (n, 3)  ->  diff: (n, 4, 3)
+        diff = X.unsqueeze(1) - P.unsqueeze(0)
+        # inner: (n, 4)
+        inner = (A.unsqueeze(0) * diff.pow(2)).sum(dim=-1)
+        # result: (n,)
+        result = -(alpha.unsqueeze(0) * torch.exp(-inner)).sum(dim=-1)
+        return result.unsqueeze(-1)
+
+
+# ---------------------------------------------------------------------------
 # Hartmann 6-D
 # ---------------------------------------------------------------------------
 
