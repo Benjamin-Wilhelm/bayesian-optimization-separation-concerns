@@ -191,21 +191,28 @@ def build_normalized_benchmark(config: Mapping[str, Any]) -> NormalizedBenchmark
     sub["noise_std"] = 0.0
     inner = BENCHMARK_REGISTRY[name].from_config(sub)
 
+    # Output-range resolution order:
+    #   1. explicit ``normalization:`` config keys;
+    #   2. a range provided by the benchmark itself via ``output_range()``
+    #      (parameterizable benchmarks, e.g. DoubleGaussianWell1D, compute
+    #      their range from their actual geometry);
+    #   3. the hard-coded ``KNOWN_OUTPUT_RANGES`` constants.
     norm_cfg: Mapping[str, Any] = config.get("normalization") or {}
-    known = KNOWN_OUTPUT_RANGES.get(name)
     f_min = norm_cfg.get("f_min")
     f_max = norm_cfg.get("f_max")
     direction = norm_cfg.get("direction")
     if f_min is None or f_max is None or direction is None:
-        if known is None:
+        own_range = getattr(inner, "output_range", None)
+        fallback = own_range() if callable(own_range) else KNOWN_OUTPUT_RANGES.get(name)
+        if fallback is None:
             raise ValueError(
                 f"No known output range for benchmark '{name}'.  Provide "
                 "'normalization: {f_min, f_max, direction}' explicitly in "
                 "the config."
             )
-        f_min = known[0] if f_min is None else f_min
-        f_max = known[1] if f_max is None else f_max
-        direction = known[2] if direction is None else direction
+        f_min = fallback[0] if f_min is None else f_min
+        f_max = fallback[1] if f_max is None else f_max
+        direction = fallback[2] if direction is None else direction
 
     noise_std = float(config.get("noise_std") or 0.0)
 

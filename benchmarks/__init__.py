@@ -23,6 +23,7 @@ from benchmarks.toy import (
     Exponential1D,
     GaussianTrap1D,
     DampedOscillatoryTrap1D,
+    DoubleGaussianWell1D,
 )
 
 # Look-up table used by ``process.py`` to re-instantiate a benchmark from its
@@ -40,6 +41,7 @@ BENCHMARK_REGISTRY: dict[str, type[SyntheticBenchmark]] = {
     "exponential_1d": Exponential1D,
     "gaussian_trap_1d": GaussianTrap1D,
     "damped_oscillatory_trap_1d": DampedOscillatoryTrap1D,
+    "double_gaussian_well_1d": DoubleGaussianWell1D,
 }
 
 
@@ -163,6 +165,7 @@ __all__ = [
     "Exponential1D",
     "GaussianTrap1D",
     "DampedOscillatoryTrap1D",
+    "DoubleGaussianWell1D",
     "DEFAULT_NOISE_STD_SINE_TREND1D",
     "DEFAULT_NOISE_STD_FORRESTER1D",
     "DEFAULT_NOISE_STD_BRANIN",

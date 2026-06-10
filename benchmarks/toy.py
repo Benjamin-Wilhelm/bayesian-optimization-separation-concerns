@@ -293,6 +293,138 @@ class DampedOscillatoryTrap1D(SyntheticBenchmark):
 
         oscillation = a * torch.exp(-decay * x) * torch.sin(two_pi * freq * x)
         return x + oscillation
+class DoubleGaussianWell1D(SyntheticBenchmark):
+    """One-dimensional bimodal benchmark with two Gaussian wells of
+    different depths (prior-guided BO trap).
+
+    The noiseless function is
+
+        f(x) = - A_deep    exp(-(x - c_deep)^2    / (2 s_deep^2))
+               - A_shallow exp(-(x - c_shallow)^2 / (2 s_shallow^2))
+
+    on a configurable one-dimensional domain (default [0, 1]).
+
+    Geometry (minimization convention):
+
+    - a **deep** well of depth ``A_deep`` at ``c_deep`` — the global
+      minimum, ``f(c_deep) ≈ -A_deep``;
+    - a **shallow** well of depth ``A_shallow < A_deep`` at ``c_shallow`` —
+      a deceptive local minimum whose floor is higher than the deep well's.
+
+    Intended use (Experiment B): after output normalization the deep well
+    maps to the global maximum ``f_norm = 1`` and the shallow well to a
+    local maximum at height ``≈ A_shallow / A_deep``.  A *good* prior is
+    centered on the deep well; a *bad* prior centered on the shallow well
+    actively pulls the search into the wrong basin.
+
+    The output range over the domain is computed at construction on a dense
+    deterministic grid and exposed via :meth:`output_range`, so the
+    normalization wrapper does not rely on hard-coded constants.
+
+    Args:
+        noise_std: Observation noise standard deviation.
+        deep_center: Location ``c_deep`` of the global (deeper) well.
+        deep_depth: Depth ``A_deep > 0`` of the global well.
+        deep_width: Width ``s_deep > 0`` of the global well.
+        shallow_center: Location ``c_shallow`` of the local (shallower) well.
+        shallow_depth: Depth ``A_shallow`` with ``0 < A_shallow < A_deep``.
+        shallow_width: Width ``s_shallow > 0`` of the local well.
+        bounds: Optional domain override, shape ``(2, 1)``.
+    """
+
+    # Dense-grid resolution used to evaluate the output range.
+    _RANGE_GRID_SIZE: int = 200_001
+
+    def __init__(
+        self,
+        noise_std: float = 0.0,
+        deep_center: float = 0.70,
+        deep_depth: float = 1.0,
+        deep_width: float = 0.08,
+        shallow_center: float = 0.25,
+        shallow_depth: float = 0.6,
+        shallow_width: float = 0.12,
+        bounds: Optional[torch.Tensor] = None,
+    ) -> None:
+        if deep_width <= 0 or shallow_width <= 0:
+            raise ValueError("well widths must be strictly positive.")
+        if deep_depth <= 0 or shallow_depth <= 0:
+            raise ValueError("well depths must be strictly positive.")
+        if shallow_depth >= deep_depth:
+            raise ValueError(
+                f"shallow_depth must be strictly smaller than deep_depth "
+                f"(got shallow={shallow_depth}, deep={deep_depth}); otherwise "
+                "the 'shallow' well is not the deceptive one."
+            )
+
+        self.deep_center = float(deep_center)
+        self.deep_depth = float(deep_depth)
+        self.deep_width = float(deep_width)
+        self.shallow_center = float(shallow_center)
+        self.shallow_depth = float(shallow_depth)
+        self.shallow_width = float(shallow_width)
+
+        default_bounds = torch.tensor([[0.0], [1.0]], dtype=torch.double)
+        resolved_bounds = SyntheticBenchmark.resolve_bounds(default_bounds, bounds)
+
+        lb, ub = resolved_bounds[0, 0].item(), resolved_bounds[1, 0].item()
+        for label, c in (("deep_center", self.deep_center),
+                         ("shallow_center", self.shallow_center)):
+            if not lb <= c <= ub:
+                raise ValueError(f"{label}={c} must lie inside the domain [{lb}, {ub}].")
+
+        super().__init__(
+            name="double_gaussian_well_1d",
+            dim=1,
+            bounds=resolved_bounds,
+            default_noise_std=noise_std,
+        )
+
+        # Deterministic dense-grid output range over the domain, used by the
+        # normalization wrapper (the analytic extrema shift slightly when
+        # the two Gaussians overlap, so constants would be parameter-bound).
+        grid = torch.linspace(lb, ub, self._RANGE_GRID_SIZE, dtype=torch.double)
+        f_vals = self.f(grid.unsqueeze(-1)).squeeze(-1)
+        self._f_min = float(f_vals.min().item())
+        self._f_max = float(f_vals.max().item())
+
+    def f(self, X: torch.Tensor) -> torch.Tensor:
+        x = X[..., :1]
+        deep = self.deep_depth * torch.exp(
+            -((x - self.deep_center) ** 2) / (2.0 * self.deep_width ** 2)
+        )
+        shallow = self.shallow_depth * torch.exp(
+            -((x - self.shallow_center) ** 2) / (2.0 * self.shallow_width ** 2)
+        )
+        return -(deep + shallow)
+
+    def output_range(self) -> tuple[float, float, str]:
+        """``(f_min, f_max, direction)`` over the domain (minimization)."""
+        return self._f_min, self._f_max, "min"
+
+    _CONFIG_KEYS: frozenset[str] = frozenset({
+        "name",
+        "noise_std",
+        "bounds",
+        "deep_center",
+        "deep_depth",
+        "deep_width",
+        "shallow_center",
+        "shallow_depth",
+        "shallow_width",
+    })
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "DoubleGaussianWell1D":
+        cls._check_allowed_keys(config, cls._CONFIG_KEYS)
+        kwargs = cls._extract_common_kwargs(config)
+        for key in ("deep_center", "deep_depth", "deep_width",
+                    "shallow_center", "shallow_depth", "shallow_width"):
+            if key in config and config[key] is not None:
+                kwargs[key] = float(config[key])
+        return cls(**kwargs)
+
+
 # ---------------------------------------------------------------------------
 # SineTrend 1-D  (pedagogical)
 # ---------------------------------------------------------------------------
