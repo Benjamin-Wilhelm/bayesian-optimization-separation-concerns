@@ -1,0 +1,78 @@
+# Smoke test for the Experiment B pipeline: tiny budget, 2 seeds, Forrester 1-D, good prior.
+
+experiment:            exp_b_prior_guided
+tag:                   smoke_forrester
+
+benchmark:
+  name: forrester_1d
+
+# Observation noise, on the NORMALIZED scale (f_norm in [0, 1]).
+noise_std:             0.01
+
+# Normalization defaults come from benchmarks.normalized.KNOWN_OUTPUT_RANGES;
+# override here only if needed:
+# normalization:
+#   f_min: ...
+#   f_max: ...
+#   direction: min
+
+seeds:                 [0, 1]
+
+# Gaussian domain prior pi_c(x) = exp(-||x - c||^2 / (2 l^2)),
+# expressed in native domain coordinates.
+prior:
+  label:       good
+  center:      [0.757249]
+  lengthscale: 0.15
+
+alpha:                 0.5    # prior weight of alpha_pi_ucb
+beta:                  2.0    # UCB exploration parameter (all methods)
+lambda_init:           1.0    # initial lambda of the prior-mean GP
+
+initial_design_size:   3
+budget:                4
+
+num_restarts:          4
+raw_samples:           64
+device:                cpu
+
+methods:
+  - vanilla_ucb
+  - alpha_pi_ucb
+  - lambda_pi_fixed_ucb
+  - lambda_pi_adaptive_ucb
+
+# Hitting-time tolerance on the simple regret (normalized scale).
+epsilon:               0.05
+
+model:
+  use_fixed_noise:     true
+  normalize_input:     true
+  # Outputs are already normalized to [0, 1]; standardization must stay off
+  # so the prior mean lambda * pi(x) lives on the observation scale.
+  standardize_output:  false
+
+test_grid:
+  n_test:              128
+  seed:                123
+  calibration_every:   2
+  m_test_joint_distrib: 64
+  joint_nlpd_jitter:   1.0e-6
+
+calibration:
+  compute_global:        true
+  compute_prior_region:  true
+  # Prior region = {x : pi(x) >= threshold}, masked on the global grid.
+  prior_region_threshold: 0.5
+  compute_joint:         true
+  store_predictions:     true
+
+aggregate:
+  baseline_method:                vanilla_ucb
+  convergence_band_type:          pointwise
+  calibration_band_type:          pointwise
+  residual_band_type:             uniform
+  n_bootstrap:                    500
+  confidence:                     0.95
+  aggregate_calibration_curves:   true
+  aggregate_instantaneous_curves: true
