@@ -5,31 +5,41 @@ tag:                   branin_2d_good_prior
 
 benchmark:
   name: branin_2d
+  # Same restricted study domain as Experiment A (branin_2d_short.yaml):
+  # contains a single global minimizer, (pi, 2.275).
+  bounds:
+    lower: [0.0, -2.0]
+    upper: [5.5, 6.0]
 
-# Observation noise, on the NORMALIZED scale (f_norm in [0, 1]).
-noise_std:             0.01
+# Observation noise on the RAW oriented scale (g = -f_raw, f_opt ~= -0.40).
+noise_std:             2.0
 
-# Normalization defaults come from benchmarks.normalized.KNOWN_OUTPUT_RANGES;
-# override here only if needed:
-# normalization:
-#   f_min: ...
-#   f_max: ...
-#   direction: min
+# Raw inner output range over the RESTRICTED domain above (the
+# KNOWN_OUTPUT_RANGES defaults are only valid on Branin's default domain).
+# f_min: exact analytic minimum, attained at (pi, 2.275) inside the box.
+# f_max: numerical maximum over the box (dense 2001^2 grid + L-BFGS-B
+#        refinement, 2026-06-11), attained at the corner (0, -2).
+orientation:
+  f_min: 0.39788735772973816
+  f_max: 83.60211264227026
+  direction: min
 
 seeds:                 [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50]
 
-# Gaussian domain prior pi_c(x) = exp(-||x - c||^2 / (2 l^2)),
-# expressed in native domain coordinates.
+# Gaussian domain prior pi_c(x) = exp(-0.5 * sum_j ((x_j - c_j) / l_j)^2),
+# expressed in native domain coordinates.  Per-dimension lengthscales keep
+# the prior width at 15% of each domain span (spans 5.5 and 8.0), as on the
+# other benchmarks.
 prior:
   label:       good
   center:      [3.14159, 2.275]
-  lengthscale: 2.25
+  lengthscale: [0.825, 1.2]
 
 alpha:                 0.5    # prior weight of alpha_pi_ucb
 beta:                  2.0    # UCB exploration parameter (all methods)
 lambda_init:           1.0    # initial lambda of the prior-mean GP
 
-initial_design_size:   4
+initial_design_size:   4    # matches Exp A (branin_2d_short.yaml)
 budget:                50
 
 num_restarts:          20
@@ -41,22 +51,28 @@ methods:
   - alpha_pi_ucb
   - lambda_pi_fixed_ucb
   - lambda_pi_adaptive_ucb
+  - lambda_pi_fixed_standardized_ucb
+  - lambda_pi_adaptive_standardized_ucb
 
-# Hitting-time tolerance on the simple regret (normalized scale).
-epsilon:               0.05
+# Hitting-time tolerance on the simple regret (RAW scale; ~5% of the
+# oriented range ~83.2).
+epsilon:               4.0
 
 model:
   use_fixed_noise:     true
   normalize_input:     true
-  # Outputs are already normalized to [0, 1]; standardization must stay off
-  # so the prior mean lambda * pi(x) lives on the observation scale.
-  standardize_output:  false
+  # Standardize(Y) is applied PER METHOD in run.py: ON for vanilla / alpha-pi
+  # (internal GP transform), OFF for the prior-to-the-mean methods (so the
+  # mean function lambda * f_prior stays on the target scale).  This flag only
+  # affects the standard-GP methods.
+  standardize_output:  true
 
 test_grid:
   n_test:              2048
   seed:                123
   calibration_every:   5
   m_test_joint_distrib: 64
+  m_test_joint_prior_region: 64
   joint_nlpd_jitter:   1.0e-6
 
 calibration:

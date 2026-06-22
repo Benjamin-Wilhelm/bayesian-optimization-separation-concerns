@@ -1,0 +1,1753 @@
+\documentclass[11pt]{article}
+ 
+% ============================================================
+% Packages
+% ============================================================
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+% \usepackage{lmodern}      % uncomment if available (recommended)
+ 
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{mathtools}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{hyperref}
+\usepackage{listings}
+% \usepackage{microtype}    % uncomment if available (recommended)
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{mdframed}
+ 
+% ============================================================
+% Airier document layout
+% ============================================================
+\linespread{1.08}
+\setlength{\parskip}{0.75em}
+\setlength{\parindent}{0pt}
+\setlength{\emergencystretch}{2em}
+ 
+\titlespacing*{\section}{0pt}{3.0ex plus 1ex minus .2ex}{1.6ex plus .2ex}
+\titlespacing*{\subsection}{0pt}{2.4ex plus .8ex minus .2ex}{1.1ex plus .2ex}
+\titlespacing*{\subsubsection}{0pt}{2.0ex plus .6ex minus .2ex}{0.9ex plus .2ex}
+ 
+\setlist[itemize]{topsep=0.6em,itemsep=0.35em,parsep=0.15em,leftmargin=2.2em}
+\setlist[enumerate]{topsep=0.6em,itemsep=0.35em,parsep=0.15em,leftmargin=2.2em}
+\setlist[description]{topsep=0.6em,itemsep=0.4em,parsep=0.2em,leftmargin=2.8em,style=nextline}
+ 
+\renewcommand{\arraystretch}{1.3}
+\setlength{\tabcolsep}{7pt}
+ 
+% ============================================================
+% Listings configuration
+% ============================================================
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b,
+    aboveskip=1.0em,
+    belowskip=1.0em,
+    xleftmargin=1.0em,
+    xrightmargin=1.0em
+}
+ 
+% ============================================================
+% Theorem-like environments
+% ============================================================
+\newtheorem{remark}{Remark}[section]
+\newtheorem{definition}{Definition}[section]
+\newtheorem{contract}{Contract}
+ 
+% Framed box for pipeline stages
+\newmdenv[
+  linewidth=0.8pt,
+  innerleftmargin=10pt,
+  innerrightmargin=10pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  backgroundcolor=gray!6
+]{stagebox}
+ 
+% ============================================================
+% Macros
+% ============================================================
+\newcommand{\RIGHT}{\texttt{RIGHT}}
+\newcommand{\WRONG}{\texttt{WRONG}}
+\newcommand{\dinst}{d_t^{\mathrm{inst}}}
+\newcommand{\dbest}{d_t^{\mathrm{best}}}
+\newcommand{\rtarget}{r_t^{\mathrm{target}}}
+\newcommand{\rN}{r_N^{\mathrm{target}}}
+\newcommand{\Xtest}{\mathcal{X}_{\mathrm{test}}}
+ 
+% ============================================================
+% Title
+% ============================================================
+\title{%
+  \textbf{GPBO Separation of Concerns --- Experiment A}\\[0.4em]
+  \large Reference: Methodology, Data Pipeline, and Code Architecture
+}
+\author{Benjamin Wilhelm}
+\date{May 2026}
+ 
+\begin{document}
+ 
+\maketitle
+ 
+\begin{abstract}
+This document is the primary reference for Experiment A of the
+\emph{Gaussian-Process Bayesian Optimization Separation of Concerns} project.
+It covers the scientific motivation and experimental protocol (\S\S\,\ref{sec:intro}--\ref{sec:protocol}),
+the precise definitions of all collected quantities and metrics (\S\,\ref{sec:quantities}),
+the three-stage data pipeline from raw trajectories to aggregate statistics (\S\,\ref{sec:pipeline}),
+the calibration diagnostic procedure (\S\,\ref{sec:calibration}),
+the statistical analysis plan (\S\,\ref{sec:stats}),
+a step-by-step notebook analysis roadmap (\S\,\ref{sec:notebook}),
+the intended figures (\S\,\ref{sec:figures}),
+and the code architecture (\S\,\ref{sec:code}).
+Experimental contracts are collected in \S\,\ref{sec:contracts}.
+Planned extensions are noted explicitly throughout; no unimplemented feature is described
+as existing.
+\end{abstract}
+ 
+\tableofcontents
+\clearpage
+ 
+% ============================================================
+\section{Introduction and Scientific Objective}
+\label{sec:intro}
+% ============================================================
+ 
+\subsection{The Separation of Concerns Principle in BO}
+ 
+Bayesian optimization rests on a clean conceptual separation:
+\begin{itemize}
+  \item the \emph{surrogate model} (typically a GP) encodes beliefs about the
+        unknown function $f$;
+  \item the \emph{acquisition function} encodes the decision rule that translates
+        those beliefs into a query location.
+\end{itemize}
+The \textbf{Separation of Concerns (SoC)} principle states that the surrogate should
+model the raw unknown phenomenon, while task-specific structure --- targets, priors,
+constraints, costs, preferences --- should enter only through the acquisition function.
+ 
+Violating SoC means baking task-specific transformations into the GP training targets.
+This is a widespread practice (e.g., training a GP on $|f(x)-T|$ to handle
+target-matching, or on a scalarization for multi-objective problems) and its empirical
+consequences are largely unstudied.
+ 
+\subsection{Research Questions}
+ 
+The overarching project aims to characterize, across multiple SoC scenarios, the
+empirical cost of the violation: does it degrade model quality? calibration? optimization
+performance? or all three in a causally connected chain?
+ 
+\medskip
+\textbf{Experiment A} is the first and cleanest instantiation, focusing on the
+\emph{target-matching} problem
+\[
+  \min_{x \in \mathcal{X}} |f(x) - T|.
+\]
+Three concrete questions are tested:
+\begin{enumerate}[label=(Q\arabic*)]
+  \item Does training the GP on $|f(x)-T|$ degrade optimization performance?
+  \item Does it produce worse-calibrated uncertainty estimates?
+  \item Can we visually and statistically identify the \emph{mechanism} of failure?
+\end{enumerate}
+ 
+The expected diagnostic chain is:
+\[
+  \text{SoC violation}
+  \;\Rightarrow\;
+  \text{model miscalibration near target}
+  \;\Rightarrow\;
+  \text{confidence-bound failure}
+  \;\Rightarrow\;
+  \text{acquisition failure}
+  \;\Rightarrow\;
+  \text{optimization failure.}
+\]
+ 
+% ============================================================
+\section{Experiment A: Target Matching}
+\label{sec:expA}
+% ============================================================
+ 
+\subsection{Problem Definition}
+ 
+Let $\mathcal{X} \subset \mathbb{R}^d$ be a compact domain and $f:\mathcal{X}\to\mathbb{R}$
+an unknown black-box function.
+We observe noisy evaluations
+\[
+  y_t = f(x_t) + \varepsilon_t, \qquad \varepsilon_t \sim \mathcal{N}(0,\sigma^2),
+\]
+independently across iterations.
+The goal is to find $x$ such that $f(x)$ is close to a prescribed target $T \in \mathbb{R}$.
+ 
+\subsection{Why Target Matching Exposes the SoC Issue}
+ 
+Suppose $f$ is smooth and well-modeled by a GP with a smooth kernel.
+Define the transformed objective $g(x) = |f(x)-T|$.
+Even though $f$ is smooth, $g$ develops \emph{kinks} along the target level set
+$\{x: f(x) = T\}$: the absolute-value function is non-differentiable at zero.
+Training a GP directly on $g$ therefore imposes a smooth covariance structure on a
+non-smooth function. The SoC-compliant alternative avoids this by keeping the GP on $f$
+and placing $T$ only in the acquisition.
+ 
+\subsection{Benchmark Functions}
+ 
+All benchmarks inherit from \texttt{SyntheticBenchmark}; see
+\S\,\ref{sec:code-benchmarks} for the class hierarchy.
+ 
+The registry \texttt{BENCHMARK\_REGISTRY} (in \texttt{benchmarks/\_\_init\_\_.py})
+exposes eight benchmarks, grouped into the four ``standard'' analytic functions
+and four minimal/diagnostic 1D target-matching benchmarks whose transformed
+objective $|f-T|$ has deliberately controlled geometry (a single cusp or
+several misleading near-target valleys).
+
+\begin{center}
+\begin{tabular}{lllll}
+\toprule
+Key & Name & $d$ & Domain (default) & Default $\sigma$ \\
+\midrule
+\texttt{sine\_trend\_1d} & Sine-trend 1D & 1 & $[0,1]$ & $0.05$ \\
+\texttt{forrester\_1d}  & Forrester 2008 & 1 & $[0,1]$ & $0.5$ \\
+\texttt{branin\_2d}     & Branin--Hoo    & 2 & $[-5,10]\times[0,15]$ & $2.0$ \\
+\texttt{hartmann\_6d}   & Hartmann 6D    & 6 & $[0,1]^6$ & $0.05$ \\
+\midrule
+\texttt{linear\_1d}              & Linear monotone        & 1 & $[0,1]$ & $0.0$ \\
+\texttt{exponential\_1d}         & Normalised exponential & 1 & $[0,1]$ & $0.0$ \\
+\texttt{gaussian\_trap\_1d}      & Gaussian near-target trap & 1 & $[0,1]$ & $0.0$ \\
+\texttt{damped\_oscillatory\_trap\_1d} & Damped oscillatory trap & 1 & $[0,1]$ & $0.0$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The first four are smooth/multimodal references. \texttt{linear\_1d}
+($f(x)=x$) and \texttt{exponential\_1d}
+($f(x)=(e^{ax}-1)/(e^a-1)$) are bijective, so every attainable target has a
+unique cusp in $|f-T|$. \texttt{gaussian\_trap\_1d}
+($f(x)=x-A\,e^{-(x-c)^2/2s^2}$) and \texttt{damped\_oscillatory\_trap\_1d}
+($f(x)=x+a\,e^{-\lambda x}\sin(2\pi m x)$) add \emph{local} near-target valleys
+to the transformed objective, stress-testing the \WRONG{} surrogate.
+
+\textbf{Default $\sigma$} is a module-level per-benchmark constant
+(\texttt{DEFAULT\_NOISE\_STD\_*}); it is always overridable by the YAML
+\texttt{noise\_std} field. The default noiseless runs in \texttt{configs/} set
+$\sigma = 0$.
+
+\textbf{Configuration.} Benchmarks are built by
+\texttt{benchmarks.build\_benchmark(config)}, which accepts both a flat layout
+(\texttt{benchmark: <name>} plus top-level \texttt{noise\_std}/\texttt{bounds})
+and a nested layout (\texttt{benchmark: \{name, bounds, noise\_std, \dots\}}).
+Bounds and intrinsic parameters (e.g.\ \texttt{rate} for
+\texttt{exponential\_1d}; \texttt{trap\_location}, \texttt{width},
+\texttt{shape}, \texttt{trap\_gap} for \texttt{gaussian\_trap\_1d}) may be
+overridden per benchmark; unknown keys are rejected so typos cannot be silently
+ignored.
+
+Each benchmark exposes the following entry points used by the pipeline:
+\begin{description}
+  \item[\texttt{f(X)}] : Noiseless evaluation. Used \emph{only} post-hoc for metrics; the BO algorithm never sees it.
+  \item[\texttt{observe(X)}] : Noisy evaluation $f(X) + \mathcal{N}(0,\sigma^2)$. The only quantity the BO loop queries.
+  \item[\texttt{test\_set(n, seed)}] : Deterministic scrambled Sobol grid in the native bounds, used for held-out (global) calibration. Reproducible from
+        $(\text{benchmark}, n, \text{seed})$.
+  \item[\texttt{near\_target\_test\_set(target, epsilon, n, seed)}] : Deterministic rejection-sampled Sobol grid of exactly $n$ points satisfying $|f(x)-T|\le\varepsilon$, used for the near-target calibration set (replaces masking the global grid).
+  \item[\texttt{oracle\_target\_distance(T)}] : Analytic value of $\min_x|f(x)-T|$, currently implemented for \texttt{sine\_trend\_1d}; returns $0$ when the target is attainable. The default (other benchmarks) is \texttt{None}, treated downstream as $\texttt{oracle\_best}=0$.
+\end{description}
+ 
+% ============================================================
+\subsection{Methods Compared}
+\label{sec:methods}
+% ============================================================
+ 
+Two methods are registered in the pipeline under fixed symbolic names.
+These names are the keys of every JSON file produced by all three pipeline stages.
+ 
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Symbolic key & Label & Role \\
+\midrule
+\texttt{right\_target\_matching\_ucb} & \RIGHT & SoC-compliant baseline \\
+\texttt{wrong\_gp\_on\_abs\_lcb}      & \WRONG & SoC-violating baseline \\
+\bottomrule
+\end{tabular}
+\end{center}
+ 
+\subsubsection{WRONG: GP Trained on the Transformed Objective}
+ 
+\textbf{Training targets:} $\tilde{y}_i = |y_i - T|$.
+The GP surrogate family is held fixed across methods: like \RIGHT, \WRONG{}
+uses a \texttt{FixedNoiseGP} at the known benchmark noise level $\sigma$, so the
+\emph{only} difference between the two methods is the training target (raw $y$
+vs.\ the transformed $|y-T|$), not the model class. (The noise on $|y-T|$ is in
+truth non-Gaussian and folded near the target; fixing it to $\sigma$ keeps the
+comparison controlled.)
+ 
+\textbf{Acquisition:} negated lower confidence bound on the transformed quantity,
+\[
+  \alpha_t^{\mathrm{wrong}}(x)
+  = -\mu_{g,t}(x) + \sqrt{\beta}\,\sigma_{g,t}(x),
+\]
+which BoTorch maximizes. The target $T$ is absorbed into the training data and
+\emph{never appears explicitly in the acquisition class}.
+ 
+\textbf{Key SoC violation:} the GP models $g = |f-T|$ rather than $f$, baking
+task-specific structure into the surrogate.
+ 
+\subsubsection{RIGHT: GP Trained on the Raw Function}
+ 
+\textbf{Training targets:} $y_i = f(x_i) + \varepsilon_i$.
+A \texttt{FixedNoiseGP} is used with the known benchmark noise level $\sigma$.
+ 
+\textbf{Acquisition:} target-distance UCB on the raw GP,
+\[
+  \alpha_t^{\mathrm{right}}(x)
+  = -|\mu_{f,t}(x) - T| + \sqrt{\beta}\,\sigma_{f,t}(x),
+\]
+which BoTorch maximizes.
+The first term favors points whose posterior mean is close to $T$;
+the second rewards uncertainty.
+ 
+\textbf{SoC compliance:} the GP models $f$; the target $T$ enters only through the
+acquisition function \texttt{TargetMatchingUCB}.
+ 
+Both acquisitions are \texttt{AnalyticAcquisitionFunction} subclasses with $q=1$.
+See \S\,\ref{sec:code-acq} for the implementation.
+ 
+% ============================================================
+\section{Experimental Protocol}
+\label{sec:protocol}
+% ============================================================
+ 
+\subsection{Observation Noise}
+ 
+All benchmarks use additive i.i.d.\ Gaussian noise.
+The noise standard deviation $\sigma$ is fixed per benchmark and recorded in the YAML
+configuration file (field \texttt{noise\_std}).
+ 
+\subsection{Initial Design}
+ 
+Each run starts from a Sobol initial design of size $n_0$.
+The current \texttt{smoke\_1d.yaml} configuration sets $n_0 = 4$; the small-$n_0$
+diagnostic configs use $n_0 = 1$.
+ 
+\begin{contract}[Paired initial design]
+\label{contract:paired}
+For every seed, \RIGHT{} and \WRONG{} receive the \emph{same} Sobol initial design and
+the \emph{same} initial noisy observations.
+This is enforced by \texttt{run.py:\_run\_one\_seed}, which sets
+\texttt{torch.manual\_seed(seed)} once, calls \texttt{problem.observe(X\_init)}, and
+stores the result in \texttt{InitialDesign} at the seed level---\emph{outside} each
+method's data structure.
+\end{contract}
+ 
+\subsection{Sequential Budget and Total History Length}
+ 
+After initialization, each method runs for \texttt{budget} additional BO steps.
+The full evaluation history of length $N = n_0 + \texttt{budget}$ is used for all
+metrics. The current smoke configuration uses $\texttt{budget} = 50$ with
+$n_0 = 4$, giving $N = 54$.
+ 
+\subsection{Repetitions}
+ 
+The current configurations use 100 independent seeds.
+Each seed produces one independent draw of Sobol scramble, noise realizations, and
+optimizer stochasticity.
+ 
+\subsection{BO Iteration Loop}
+ 
+At each BO iteration $t = 1, \ldots, \texttt{budget}$:
+\begin{enumerate}
+  \item Reconstruct the training set from all previous observations up to $t-1$,
+        applying the method-specific transform (\texttt{"y\_obs"} or
+        \texttt{"abs(y\_obs - target)"}).
+  \item Fit the GP via marginal log-likelihood maximization (MLL).
+  \item Record a \texttt{ModelSnapshot} (state dict of the fitted GP).
+  \item Optimize the acquisition function to obtain the next candidate $x_t$.
+  \item Query $y_t = \texttt{problem.observe}(x_t)$; record a \texttt{StepRecord}.
+  \item Append $(x_t, y_t)$ to the history.
+\end{enumerate}
+ 
+\subsection{Configuration Reference}
+ 
+\begin{lstlisting}[caption={Current smoke configuration (\texttt{smoke\_1d.yaml})},label=lst:config]
+experiment:            exp_a_target_matching
+tag:                   branin_2d_single_ring_noiseless_100seeds
+benchmark:             branin_2d        # flat layout; or a nested mapping
+bounds:                                 # optional per-run domain override
+  lower:               [0.0, -2.0]
+  upper:               [5.5,  6.0]
+seeds:                 [1, 2, ..., 100]
+target:                5.0
+beta:                  2.0
+initial_design_size:   4
+budget:                50
+noise_std:             0.0
+num_restarts:          25
+raw_samples:           2048
+device:                cpu
+methods:
+  - right_target_matching_ucb
+  - wrong_gp_on_abs_lcb
+
+# Used by process.py and analyze.py only (not by run.py)
+epsilon:               0.50       # hitting-time tolerance
+failure_threshold:     1.00
+test_grid:
+  n_test:              4096       # global held-out grid size
+  seed:                123
+  calibration_every:   5          # calibration checkpoint cadence
+  m_test_joint_distrib: 64        # joint-NLPD subgrid size (global)
+  joint_nlpd_jitter:   1.0e-6
+  # optional, for a dedicated near-target grid:
+  # n_test_near_target: 512
+  # near_target_seed:   124
+  # m_test_joint_near_target: 64
+near_target_epsilon:   0.50
+calibration:
+  compute_global:      true
+  compute_near_target: true
+  compute_joint:       true
+  store_predictions:   true
+aggregate:                        # consumed by analyze.py
+  convergence_band_type:  pointwise   # pointwise | uniform | both
+  calibration_band_type:  pointwise
+  residual_band_type:     uniform
+  n_bootstrap:            10000
+  confidence:             0.95
+  aggregate_calibration_curves:   true
+  aggregate_instantaneous_curves: true
+\end{lstlisting}
+ 
+% ============================================================
+\subsection{Quantities of Interest and Metrics}
+\label{sec:quantities}
+% ============================================================
+ 
+All metrics operate on the \emph{noiseless} trajectory
+$f_{1:N} = (f(x_1), \ldots, f(x_N))$, which covers the full evaluation history
+including the initial design ($N = n_0 + \texttt{budget}$).
+The noiseless values $f(x_t)$ are recorded during the BO loop and stored in
+\texttt{StepRecord.f\_noiseless}.
+The oracle value $\texttt{oracle\_best} = \min_x|f(x)-T|$ comes from the benchmark's
+\texttt{oracle\_target\_distance(T)} method.
+ 
+\subsubsection{Primary Per-Trajectory Curves}
+\label{sec:curves}
+ 
+The following four time series are stored in \texttt{ConvergenceCurves} (one per
+(seed, method), length $N$):
+ 
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Field name & Symbol & Definition \\
+\midrule
+\texttt{instantaneous\_target\_distance}
+  & $\dinst$
+  & $|f(x_t) - T|$ \\[0.4em]
+\texttt{running\_best\_target\_distance}
+  & $\dbest$
+  & $\min_{s \le t} |f(x_s) - T|$ \\[0.4em]
+\texttt{cumulative\_inst\_target\_regret}
+  & ---
+  & $\sum_{s=1}^{t} \bigl(|f(x_s)-T| - \texttt{oracle\_best}\bigr)$ \\[0.4em]
+\texttt{cumulative\_bsf\_target\_regret}
+  & ---
+  & $\sum_{s=1}^{t} \bigl(\dbest[s] - \texttt{oracle\_best}\bigr)$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+ 
+\begin{remark}
+  $\dinst$ is the \emph{instantaneous} target distance.
+  It is \textbf{not} a simple regret: it does not accumulate knowledge across iterations.
+  $\dbest$ is the running-best target distance;
+  it is monotonically non-increasing.
+\end{remark}
+ 
+\subsubsection{Derived Scalars: Target Simple Regret}
+ 
+The \textbf{target simple regret} at iteration $t$ is
+\[
+  \rtarget = \dbest - \texttt{oracle\_best}
+           = \min_{s \le t}|f(x_s) - T| - \min_{x \in \mathcal{X}}|f(x) - T|.
+\]
+When the target is attainable ($\texttt{oracle\_best} = 0$), this simplifies to
+$\rtarget = \dbest$.
+For benchmarks where \texttt{oracle\_target\_distance} is not implemented,
+\texttt{oracle\_best} is set to $0$ (conservative: attainability assumed).
+ 
+\subsubsection{Per-Trajectory Scalars}
+\label{sec:scalars}
+ 
+The following scalars are stored in \texttt{FinalScalars}, computed by
+\texttt{process.py} from the full history:
+ 
+\begin{center}
+\begin{longtable}{lp{8.5cm}}
+\toprule
+Field & Definition \\
+\midrule
+\endhead
+\texttt{n\_evaluations}
+  & $N = n_0 + \texttt{budget}$ \\
+\texttt{final\_best\_target\_distance}
+  & $\min_{1 \le t \le N} |f(x_t) - T|
+    = d_N^{\mathrm{best}}$ \\
+\texttt{final\_target\_simple\_regret}
+  & $d_N^{\mathrm{best}} - \texttt{oracle\_best}$ \\
+\texttt{mean\_inst\_target\_distance}
+  & $\frac{1}{N}\sum_{t=1}^{N}|f(x_t)-T|$ \\
+\texttt{median\_inst\_target\_distance}
+  & $\mathrm{median}_{t}\,|f(x_t)-T|$ \\
+\texttt{worst\_inst\_target\_distance}
+  & $\max_{t}|f(x_t)-T|$ \\
+\texttt{cumulative\_inst\_target\_regret}
+  & $\sum_{t=1}^{N}(|f(x_t)-T|-\texttt{oracle\_best})$ \\
+\texttt{cumulative\_bsf\_target\_regret}
+  & $\sum_{t=1}^{N}(d_t^{\mathrm{best}}-\texttt{oracle\_best})$ \\
+\texttt{auc\_running\_target\_regret}
+  & Trapezoidal AUC of the running-best target regret
+    curve $t \mapsto \rtarget$ \\
+\texttt{hitting\_time}
+  & $\min\{t : d_t^{\mathrm{best}} \le \varepsilon\}$;
+    equals $N+1$ if never reached;
+    \texttt{None} if $\varepsilon$ is unset \\
+\texttt{failure\_indicator}
+  & $\mathbf{1}\{d_N^{\mathrm{best}} > u\}$
+    where $u =$ \texttt{failure\_threshold};
+    \texttt{None} if threshold is unset \\
+\texttt{best\_x}
+  & $\arg\min_t |f(x_t)-T|$: the argmin point \\
+\bottomrule
+\end{longtable}
+\end{center}
+ 
+\subsubsection{Summary of All Metrics}
+ 
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Metric & Type & Primary use \\
+\midrule
+$\dinst = |f(x_t)-T|$ & curve & Visual exploration \\
+$\dbest = \min_{s\le t}|f(x_s)-T|$ & curve & Convergence curve \\
+$\rtarget = \dbest - \texttt{oracle\_best}$ & curve/scalar & Main perf.\ metric \\
+Cumulative inst.\ regret & curve/scalar & Alternative perf.\ metric \\
+Cumulative BSF regret & curve/scalar & Alternative perf.\ metric \\
+AUC of running-best regret & scalar & Aggregate perf.\ \\
+Hitting time $\tau_\varepsilon$ & scalar & Convergence speed \\
+Failure indicator $\mathbf{1}\{\cdot > u\}$ & scalar & Tail-risk analysis \\
+NLPD (marginal) & scalar (per checkpt) & Calibration quality \\
+Joint Gaussian NLPD & scalar (per checkpt) & Joint calibration on a subgrid \\
+Empirical 95\% coverage & scalar (per checkpt) & Calibration quality \\
+Std.\ residual mean/std & scalar (per checkpt) & Calibration diagnostic \\
+PIT mean/std & scalar (per checkpt) & Calibration diagnostic \\
+Confidence violation rate & scalar (per checkpt) & Near-target calibration \\
+\bottomrule
+\end{tabular}
+\end{center}
+ 
+% ============================================================
+\section{Experimental Output Pipeline}
+\label{sec:pipeline}
+% ============================================================
+ 
+The pipeline is divided into three strictly separated stages:
+ 
+\begin{stagebox}
+\[
+  \underbrace{\texttt{run.py}}_{\text{BO loop}}
+  \;\longrightarrow\;
+  \underbrace{\text{raw seed JSON}}_{\text{trajectory facts}}
+  \;\longrightarrow\;
+  \underbrace{\texttt{process.py}}_{\text{per-seed processing}}
+  \;\longrightarrow\;
+  \underbrace{\text{processed per-seed JSON}}_{\text{derived quantities}}
+  \;\longrightarrow\;
+  \underbrace{\texttt{analyze.py}}_{\text{cross-seed aggregation}}
+  \;\longrightarrow\;
+  \underbrace{\text{aggregate JSON}}_{\text{statistics}}
+\]
+\end{stagebox}
+ 
+Each stage is a pure function of its inputs; only \texttt{run.py} touches the world
+(draws noise, runs BO).
+Re-running the BO loop is the only expensive operation; everything downstream is
+recomputable in seconds.
+ 
+\subsection{Run Directory Layout}
+\label{sec:run-dir}
+ 
+Each invocation of \texttt{run.py} creates one run directory:
+ 
+\begin{lstlisting}
+results/exp_a_target_matching/runs/<run_id>/
+    config.json                   # YAML config saved as JSON
+    metadata.json                 # git commit, sys.argv, Python, platform, UTC
+    logs/run.log                  # streamed iteration log
+    raw/<benchmark>/
+        seed_001.json             # RAW: one file per seed
+        seed_002.json
+        ...
+    processed/per_seed/<benchmark>/
+        seed_001_processed.json   # PROCESSED: one file per seed
+        seed_002_processed.json
+        ...
+    processed/aggregate/<benchmark>/
+        final_performance.json    # AGGREGATE: up to 5 files per benchmark
+        convergence_curves.json   #   performance / regret curves only
+        calibration_summary.json  #   calibration scalars (final checkpoint)
+        calibration_curves.json   #   calibration curves vs iteration (optional)
+        statistical_tests.json
+    figures/                      # Reserved (make_figures.py not yet implemented)
+\end{lstlisting}
+ 
+where \texttt{<run\_id>} has the form \texttt{YYYY-MM-DD\_HH-MM-SS\_<tag>} (UTC).
+ 
+\subsubsection{RAW Data: \texttt{raw/<benchmark>/seed\_NNN.json}}
+\label{sec:raw}
+ 
+\paragraph{Produced by:} \texttt{run.py} (during the BO loop).
+\paragraph{Granularity:} one file per (benchmark, seed).
+\paragraph{Contents:} trajectory facts only 
+ 
+\medskip
+Top-level schema (\texttt{RawSeedData}, declared in \texttt{data/raw.py}):
+\begin{lstlisting}
+RawSeedData
+|-- metadata         : SeedMetadata
+|-- initial_design   : InitialDesign          # shared across methods
+`-- methods          : {
+        "right_target_matching_ucb": MethodTrajectory,
+        "wrong_gp_on_abs_lcb"      : MethodTrajectory,
+    }
+\end{lstlisting}
+ 
+\textbf{\texttt{SeedMetadata}:}
+\texttt{experiment}, \texttt{problem\_type} (\texttt{"synthetic"}),
+\texttt{benchmark}, \texttt{seed}, \texttt{budget}, \texttt{initial\_design\_size},
+\texttt{target}, \texttt{noise\_std}, \texttt{dim}, \texttt{bounds}.
+ 
+\textbf{\texttt{InitialDesign}:}
+\texttt{X} (shape $(n_0, d)$), \texttt{y\_obs} (shape $(n_0,)$),
+\texttt{f\_noiseless} (shape $(n_0,)$ or \texttt{None}).
+Produced once per seed by \texttt{sobol\_design(bounds, n\_init, seed)}
+followed by \texttt{problem.observe(X\_init)}.
+ 
+\textbf{\texttt{MethodTrajectory}:}
+method name, \texttt{train\_label} (transform recipe),
+an ordered list of \texttt{budget} \texttt{StepRecord}s,
+and a parallel list of \texttt{budget} \texttt{ModelSnapshot}s.
+ 
+\textbf{\texttt{StepRecord} (per BO iteration):}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Field & Content \\
+\midrule
+\texttt{iteration} & 1-based index (excludes initial design) \\
+\texttt{x}         & candidate point, shape $(d,)$ \\
+\texttt{y\_obs}    & noisy observation \\
+\texttt{f\_noiseless} & noiseless benchmark value (for post-hoc metrics) \\
+\texttt{acq\_value} & acquisition value at $x_t$ \\
+\texttt{train\_size} & $n_0 + \texttt{iteration} - 1$ \\
+\texttt{posterior\_mean\_at\_candidate} & $\mu_{t-1}(x_t)$ \\
+\texttt{posterior\_std\_at\_candidate}  & $\sigma_{t-1}(x_t)$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+ 
+\textbf{\texttt{ModelSnapshot} (per fitted GP):}
+\texttt{iteration}, \texttt{model\_type} (\texttt{"SingleTaskGP"} or
+\texttt{"FixedNoiseGP"}), \texttt{kernel\_name},
+\texttt{noise\_std} (for \texttt{FixedNoiseGP} reconstruction;
+\texttt{None} for inferred-noise models),
+\texttt{state\_dict} (JSON-serialised \texttt{torch.nn.Module.state\_dict()},
+including raw lengthscales, outputscale, input-normalisation min/range,
+outcome-standardisation mean/std),
+\texttt{hyperparameters} (parsed scalars for human inspection only).
+ 
+\textbf{What the raw file does NOT store:}
+$(\texttt{train\_X}, \texttt{train\_Y})$ at each iteration (rebuilt by
+\texttt{process.py}), aggregated quantities, and test-grid predictions.
+ 
+\subsubsection{PROCESSED Per-Seed Data:
+  \texttt{processed/per\_seed/<benchmark>/seed\_NNN\_processed.json}}
+\label{sec:processed}
+ 
+\paragraph{Produced by:} \texttt{process.py} (post-processing; reads one raw file at a time).
+\paragraph{Granularity:} one file per (benchmark, seed).
+\paragraph{Contents:} all derived quantities for that seed --- scalars, convergence
+curves, and calibration reports for every retained checkpoint.
+ 
+\medskip
+Top-level schema (\texttt{ProcessedSeedData}, declared in \texttt{data/processed.py}):
+\begin{lstlisting}
+ProcessedSeedData
+|-- metadata          : dict           # copy of SeedMetadata (no raw lookup needed)
+|-- target            : float
+|-- epsilon           : float | None
+|-- failure_threshold : float | None
+|-- oracle_best       : float          # min_x |f(x) - T|
+|-- test_grid         : TestGrid        # see below; stored once per seed
+`-- methods           : { "<name>": MethodProcessed }
+
+TestGrid                                # grid provenance, no points stored
+|-- n_test, seed                        # global Sobol grid
+|-- near_target_epsilon, near_target_mode
+|-- n_test_near_target, near_target_seed, near_target_pool_size
+`-- m_test_joint_distrib, m_test_joint_near_target
+
+MethodProcessed
+|-- method_name   : str
+|-- train_label   : str                # "y_obs" or "abs(y_obs - target)"
+|-- final         : FinalScalars       # see Section 5.3
+|-- convergence   : ConvergenceCurves  # see Section 5.1
+`-- calibrations  : list[CalibrationReport]
+\end{lstlisting}
+
+Test-grid metadata (sizes, seeds, near-target/joint settings) is stored once
+per seed in \texttt{ProcessedSeedData.test\_grid} and is not duplicated inside
+each report. Each \texttt{CalibrationReport} contains:
+\begin{itemize}
+  \item \texttt{iteration\_index}: the checkpoint iteration index;
+  \item \texttt{global\_calibration}: full-grid diagnostic dictionary
+        (\texttt{calibration\_summary} on $X_{\mathrm{test}}$);
+  \item \texttt{near\_target} (optional): diagnostics on the dedicated
+        near-target grid, with \texttt{near\_target\_count}/\texttt{fraction}
+        and, when configured, joint near-target NLPD fields;
+  \item \texttt{joint\_posterior} (optional): joint Gaussian NLPD on an
+        $m_{\mathrm{joint}}$-sized subgrid (Mahalanobis term, log-det, jitter);
+  \item \texttt{predictions} (optional): \texttt{CalibrationPredictionGrid}
+        storing only $(\mu,\sigma)$ on the global grid --- $X_{\mathrm{test}}$ and
+        $y_{\mathrm{true}}$ are reconstructed deterministically from the
+        benchmark, so they are no longer duplicated per checkpoint.
+\end{itemize}
+ 
+\subsubsection{AGGREGATED Cross-Seed Data:
+  \texttt{processed/aggregate/<benchmark>/*.json}}
+\label{sec:aggregate}
+ 
+\paragraph{Produced by:} \texttt{analyze.py} (reads \emph{all} processed per-seed files for a benchmark; the only stage that opens more than one seed file).
+\paragraph{Granularity:} one set of up to five files per benchmark
+(\texttt{calibration\_curves.json} is written only when
+\texttt{aggregate.aggregate\_calibration\_curves} is true).
+
+ 
+\subsubsection{\texttt{final\_performance.json}}
+ 
+For each method and each scalar in
+\[
+  \texttt{\_FINAL\_SCALAR\_KEYS} = \{
+    \texttt{final\_best\_target\_distance},\;
+    \texttt{final\_target\_simple\_regret},\;
+    \texttt{mean\_inst\_target\_distance},
+\]
+\[
+    \texttt{worst\_inst\_target\_distance},\;
+    \texttt{cumulative\_inst\_target\_regret},\;
+    \texttt{cumulative\_bsf\_target\_regret},\;
+    \texttt{auc\_running\_target\_regret},\;
+    \texttt{hitting\_time}
+  \},
+\]
+the per-seed values are stacked (dropping \texttt{None}) and summarised by
+\texttt{common.statistics.summarize\_sample}, which returns:
+\[
+  \{n,\;\mathrm{mean},\;\mathrm{std},\;\mathrm{stderr},\;\mathrm{median},\;
+    q_{25},\;q_{75},\;\min,\;\max,\;q_{90},\;q_{95}\}.
+\]
+When \texttt{failure\_indicator} is available, the empirical failure rate is also
+reported.
+ 
+\subsubsection{\texttt{convergence\_curves.json}}
+
+This file holds the \emph{performance/regret} curves only (calibration curves
+live in \texttt{calibration\_curves.json}). For each method and each of the four
+time-series (\S\,\ref{sec:curves}), the per-seed curves are stacked into a matrix
+of shape $(n_{\mathrm{seeds}}, N)$ and aggregated by
+\texttt{aggregate\_convergence\_curves}, producing
+\[
+  \{\texttt{center},\;\texttt{lower},\;\texttt{upper},\;\texttt{band\_type}\}
+\]
+per (method, curve type). The band is selected by
+\texttt{aggregate.convergence\_band\_type} (default \texttt{pointwise}):
+\begin{itemize}
+  \item \texttt{pointwise}: per-step percentile bootstrap CI
+        (\texttt{bootstrap\_ci\_curves}, \S\,\ref{sec:bootstrap});
+  \item \texttt{uniform}: simultaneous (Kolmogorov-style) band around the chosen
+        statistic (\texttt{bootstrap\_uniform\_band}), also reporting the
+        half-width multiplier $q$;
+  \item \texttt{both}: emits a \texttt{pointwise} and a \texttt{uniform} sub-block.
+\end{itemize}
+The central statistic (median by default, mean optional) is shared by both band
+types.
+
+\subsubsection{\texttt{calibration\_summary.json}}
+
+For each method, \texttt{summarize\_sample} is applied to the per-seed values of each
+calibration scalar (NLPD, coverage, residual statistics, PIT, violation rate,
+and---when computed---joint Gaussian NLPD), restricted to the \emph{final}
+calibration checkpoint of each seed. Three buckets are reported when available:
+\texttt{global} (full grid), \texttt{near\_target} (dedicated near-target grid,
+plus \texttt{near\_target\_count}/\texttt{fraction} and joint near-target NLPD),
+and \texttt{joint} (global joint-posterior NLPD).
+
+\subsubsection{\texttt{calibration\_curves.json} (optional)}
+
+Written only when \texttt{aggregate.aggregate\_calibration\_curves} is true.
+It is the calibration analogue of \texttt{convergence\_curves.json}: for each
+method and each calibration scalar, the per-checkpoint values are stacked across
+seeds and aggregated into a band \emph{versus iteration}. Band type is chosen
+\emph{per metric}: standardized-residual metrics use
+\texttt{aggregate.residual\_band\_type} (default \texttt{uniform}); all other
+calibration curves (NLPD, coverage, violation rate, PIT, joint posterior) use
+\texttt{aggregate.calibration\_band\_type} (default \texttt{pointwise}).
+
+\subsubsection{\texttt{statistical\_tests.json}}
+
+For every (\RIGHT, \WRONG) pair matched by the \texttt{right\_*}/\texttt{wrong\_*}
+prefixes, and for every scalar in \texttt{\_FINAL\_SCALAR\_KEYS}, the file reports
+the \textbf{paired Wilcoxon signed-rank test as the primary comparison} (the
+seeds are paired by construction; \S\,\ref{sec:protocol}), alongside the
+unpaired Mann--Whitney $U$ test and the effect sizes:
+\[
+  \bigl\{
+    n_R,\;n_W,\;
+    W_{\mathrm{Wilcoxon}},\;p_{\mathrm{Wilcoxon}},\;
+    U_{\mathrm{MW}},\;p_{\mathrm{MW}},\;
+    \rho_{\mathrm{rb}},\;
+    d_{\mathrm{Cohen}},\;
+    \text{failure rates}
+  \bigr\}.
+\]
+See \S\,\ref{sec:stats} for definitions.
+ 
+\medskip
+\textbf{Summary of the pipeline:}
+ 
+\begin{center}
+\begin{tabular}{lllll}
+\toprule
+Stage & Script & Per-seed or agg. & During BO? & Downstream use \\
+\midrule
+Raw & \texttt{run.py} & per seed & yes & \texttt{process.py} \\
+Processed & \texttt{process.py} & per seed & no & \texttt{analyze.py}, notebook \\
+Aggregate perf.\ & \texttt{analyze.py} & aggregate & no & notebook, figures \\
+Aggregate curves & \texttt{analyze.py} & aggregate & no & notebook, figures \\
+Aggregate calib.\ & \texttt{analyze.py} & aggregate & no & notebook, figures \\
+Aggregate calib.\ curves & \texttt{analyze.py} & aggregate (opt.) & no & notebook, figures \\
+Statistical tests & \texttt{analyze.py} & aggregate & no & notebook, paper \\
+\bottomrule
+\end{tabular}
+\end{center}
+ 
+% ============================================================
+\subsection{Calibration Pipeline}
+\label{sec:calibration}
+% ============================================================
+ 
+\subsubsection{Purpose}
+ 
+The calibration pipeline answers: does the GP's uncertainty quantification remain valid
+across the search space, and in particular near the target level set?
+It is the empirical bridge between model quality and optimization behavior.
+ 
+\subsubsection{Held-Out Test Grid}
+ 
+A deterministic global Sobol grid $X_{\mathrm{test}}$ (size $n_{\mathrm{test}}$,
+e.g.\ $4096$ in \texttt{smoke\_1d.yaml}) is produced by
+\texttt{benchmark.test\_set(n\_test, seed)}. When
+\texttt{near\_target\_epsilon} and \texttt{n\_test\_near\_target} are set, a
+\emph{dedicated} near-target grid $X_{\mathrm{near}}$ of exactly
+$n_{\mathrm{near}}$ points satisfying $|f(x)-T|\le\varepsilon$ is produced by
+\texttt{benchmark.near\_target\_test\_set(target, epsilon, n, seed)}
+(rejection-sampled Sobol). This replaces the previous approach of masking the
+global grid, guaranteeing a controlled near-target sample size even when the
+band is thin.
+
+\begin{contract}[Shared deterministic test grids]
+\label{contract:testgrid}
+$X_{\mathrm{test}}$ and $X_{\mathrm{near}}$ are pure functions of the benchmark
+and their respective $(\text{size},\text{seed})$.
+The same grids are used for both methods and across all BO seeds within a run.
+\end{contract}
+ 
+\subsubsection{GP Reconstruction at Each Checkpoint}
+ 
+Calibration is evaluated at every iteration that is a multiple of
+\texttt{calibration\_every} (default: 5) and at the final iteration.
+At each retained \texttt{ModelSnapshot}:
+ 
+\begin{enumerate}
+  \item \textbf{Rebuild training data:} reconstruct
+        $(\texttt{train\_X}, \texttt{train\_Y})$ from the initial design and the
+        trajectory prefix up to that iteration, applying the method's
+        \texttt{train\_label} transform.
+  \item \textbf{Reconstruct GP (no MLL refitting):}
+        \begin{enumerate}[label=(\alph*)]
+          \item Call \texttt{GPModelBuilder.construct(X, Y)} to create the GP object.
+          \item Call \texttt{load\_state\_dict\_into(model, snapshot.state\_dict)}.
+        \end{enumerate}
+        The result is bit-identical to the GP used during BO (Contract~\ref{contract:no-refit}).
+  \item \textbf{Posterior on test grid:} evaluate $(\mu, \sigma) =
+        \texttt{GPModelBuilder.predict}(\texttt{model}, X_{\mathrm{test}})$.
+  \item \textbf{Ground truth:}
+        $y_{\mathrm{true}} = f(X_{\mathrm{test}})$ for \RIGHT;
+        $y_{\mathrm{true}} = |f(X_{\mathrm{test}}) - T|$ for \WRONG{} (method-aware).
+  \item \textbf{Full-grid calibration:} compute the summary in \S\,\ref{sec:calib-diag}
+        on $X_{\mathrm{test}}$ (key \texttt{global\_calibration}).
+  \item \textbf{Near-target calibration} (if configured): compute the same summary
+        on the dedicated near-target grid $X_{\mathrm{near}}$ (key
+        \texttt{near\_target}), recording \texttt{near\_target\_count} and
+        \texttt{fraction}. The near-target band is always defined against raw $f$,
+        regardless of what the GP models.
+  \item \textbf{Joint Gaussian NLPD} (if \texttt{compute\_joint} and
+        \texttt{m\_test\_joint\_distrib} are set): materialise the full posterior
+        covariance over the first $m_{\mathrm{joint}}$ test points and compute the
+        Cholesky-stabilised joint NLPD (key \texttt{joint\_posterior}); optionally
+        also on the near-target slice.
+  \item \textbf{Store prediction grid} (if \texttt{store\_predictions}): save
+        only $(\mu, \sigma)$ on $X_{\mathrm{test}}$ as
+        \texttt{CalibrationPredictionGrid}. $X_{\mathrm{test}}$ and
+        $y_{\mathrm{true}}$ are reconstructed deterministically downstream, so
+        they are no longer stored per checkpoint.
+\end{enumerate}
+ 
+\begin{contract}[Calibration uses load-only reconstruction]
+\label{contract:no-refit}
+\texttt{process.py} rebuilds GPs exclusively via
+\texttt{construct} + \texttt{load\_state\_dict\_into}.
+MLL is \textbf{never} refitted during processing.
+\texttt{load\_state\_dict\_into} is strict: it raises on key mismatch.
+\end{contract}
+ 
+\subsubsection{Calibration Diagnostics}
+\label{sec:calib-diag}
+ 
+Let $y_j$ be the ground truth, $\mu_j$ the posterior mean, and $\sigma_j$ the posterior
+standard deviation at test point $j$.
+Define the \textbf{standardized residual}
+\[
+  Z_j = \frac{y_j - \mu_j}{\sigma_j}.
+\]
+Under correct calibration, $Z_j \approx \mathcal{N}(0,1)$.
+The \textbf{probability integral transform (PIT)} value is
+\[
+  U_j = \Phi(Z_j),
+\]
+which should be approximately $\mathrm{Uniform}(0,1)$ under correct calibration.
+ 
+\begin{center}
+\begin{tabular}{llp{6.5cm}}
+\toprule
+Key & Symbol / formula & Description \\
+\midrule
+\texttt{nlpd}
+  & $-\frac{1}{m}\sum_j \log p(y_j \mid \mathcal{D}_t)$
+  & Negative log predictive density \\
+\texttt{coverage\_95}
+  & $\frac{1}{m}\sum_j \mathbf{1}\{|Z_j|\le 1.96\}$
+  & Empirical 95\% interval coverage \\
+\texttt{residual\_mean}
+  & $\bar{Z}$
+  & Mean standardized residual (should be $\approx 0$) \\
+\texttt{residual\_std}
+  & $\mathrm{std}(Z_j)$
+  & Std of residuals (should be $\approx 1$) \\
+\texttt{residual\_mean\_abs}
+  & $\frac{1}{m}\sum_j |Z_j|$
+  & Mean absolute residual \\
+\texttt{pit\_mean}
+  & $\bar{U}$
+  & Mean PIT (should be $\approx 0.5$) \\
+\texttt{pit\_std}
+  & $\mathrm{std}(U_j)$
+  & Std of PIT (should be $\approx 1/\sqrt{12}$) \\
+\texttt{confidence\_violation\_rate}
+  & $\frac{1}{m}\sum_j \mathbf{1}\{|f(x_j)-\mu_j| > \sqrt{\beta}\,\sigma_j\}$
+  & Fraction violating UCB confidence bound at $\beta = 2$ \\
+\texttt{nlpd\_joint}
+  & $\frac{1}{2m}\bigl[(y{-}\mu)^\top K^{-1}(y{-}\mu) + \log\det K + m\log 2\pi\bigr]$
+  & Joint Gaussian NLPD over an $m$-point subgrid (full posterior covariance $K$;
+    Cholesky with jitter). Reported with \texttt{mahalanobis\_sq} and \texttt{logdet}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+ 
+The near-target bucket additionally reports
+\texttt{near\_target\_count} and \texttt{near\_target\_fraction}.
+ 
+\subsubsection{Theoretical Motivation for Near-Target Calibration}
+ 
+UCB-type BO convergence relies on the uniform confidence event
+\[
+  \mathcal{E}
+  = \bigl\{
+    \forall x,\,\forall t,\;
+    |f(x) - \mu_{t-1}(x)| \le \sqrt{\beta_t}\,\sigma_{t-1}(x)
+  \bigr\}.
+\]
+A SoC violation can invalidate $\mathcal{E}$ specifically near the target.
+If the GP models $g = |f-T|$, its posterior variance $\sigma_{g,t}^2(x)$ may be
+small near kinks---exactly where $f$ crosses $T$---even though uncertainty about
+$f$ near the target is high.
+The near-target confidence violation rate
+\[
+  V_t^{\mathrm{near}}
+  = \frac{1}{|\mathcal{X}_{\mathrm{near}}|}
+    \sum_{x_j \in \mathcal{X}_{\mathrm{near}}}
+    \mathbf{1}\bigl\{|f(x_j) - \mu_t(x_j)| > \sqrt{\beta}\,\sigma_t(x_j)\bigr\}
+\]
+directly probes this mechanism.
+ 
+% ============================================================
+\section{Statistical Analysis}
+\label{sec:stats}
+% ============================================================
+ 
+\subsection{Descriptive Summaries}
+ 
+For each (method, scalar) pair, \texttt{final\_performance.json} contains
+$\{n, \mathrm{mean}, \mathrm{std}, \mathrm{stderr}, \mathrm{median}, q_{25}, q_{75}, \min, \max, q_{90}, q_{95}\}$ computed across seeds. These descriptive summaries are the first thing to inspect in the notebook.
+ 
+\subsection{Bootstrap Confidence Intervals for Convergence Curves}
+\label{sec:bootstrap}
+ 
+\textbf{What is resampled:} the $n_{\mathrm{seeds}}$ rows of the curve matrix
+(shape $n_{\mathrm{seeds}} \times N$).
+Each row is one independent seed; resampling rows captures seed-to-seed variability.
+ 
+\textbf{What is estimated:} the sampling distribution of the chosen central tendency
+(median by default, mean optional) of the curve at each fixed iteration $t$.
+ 
+\textbf{Procedure:} draw $B = 5000$ bootstrap replicates; at each iteration $t$,
+record the statistic across resampled seeds; report $q_{2.5\%}$ and $q_{97.5\%}$
+as the lower and upper bounds. No parametric model is assumed for the per-iteration metric, which matters because
+target-distance distributions are bounded below by zero and may be heavily skewed.
+ 
+\begin{remark}
+The resulting CI is \textbf{pointwise} in $t$.
+The probability that the entire true curve lies simultaneously inside the envelope
+is strictly smaller than $1 - \alpha$.
+These bands are visual uncertainty summaries, not uniform-in-time confidence bands.
+\end{remark}
+ 
+\subsection{Paired Wilcoxon Signed-Rank Test (primary)}
+
+For each scalar in \texttt{\_FINAL\_SCALAR\_KEYS}, the \emph{primary} test is a
+paired Wilcoxon signed-rank test
+(\texttt{common.statistics.wilcoxon\_paired\_comparison}) on the per-seed
+differences $\Delta_i = w_i - r_i$, which exploits the paired-seed design
+(\S\,\ref{sec:protocol}):
+\begin{itemize}
+  \item \texttt{alternative = "greater"}: a small $p$-value supports
+        $\mathrm{median}(\Delta) > 0$, i.e.\ \WRONG{} has larger regret than
+        \RIGHT{} (\RIGHT{} is better, smaller-is-better convention).
+  \item Non-parametric; uses the within-seed pairing rather than treating the
+        two samples as independent.
+  \item Reported with the median/mean of $\Delta$ (\texttt{wrong} minus
+        \texttt{right}). Degenerate all-zero-difference cases return \texttt{NaN}
+        with an explanatory flag rather than raising.
+\end{itemize}
+
+\subsection{Mann--Whitney Test (secondary)}
+
+For each scalar in \texttt{\_FINAL\_SCALAR\_KEYS}, a Mann--Whitney U test
+is also run between the \RIGHT{} and \WRONG{} samples as an unpaired cross-check:
+\begin{itemize}
+  \item \texttt{alternative = "less"}: a small $p$-value supports the one-sided
+        hypothesis $r_N^{\mathrm{right}} < r_N^{\mathrm{wrong}}$ (RIGHT is better).
+  \item The test is non-parametric and does not assume normality.
+  \item It is reported alongside effect sizes; $p$-value alone is insufficient.
+\end{itemize}
+ 
+\subsection{Effect Sizes}
+ 
+\paragraph{Rank-biserial correlation.}
+\[
+  \rho_{\mathrm{rb}}
+  = \frac{\#\{(r,w): w > r\} - \#\{(r,w): w < r\}}{n_R\,n_W}
+  \in [-1,1].
+\]
+Positive values mean \RIGHT{} tends to have smaller values than \WRONG{}.
+Ties are treated neutrally. Computed exactly via vectorised pairwise comparison.
+ 
+\paragraph{Cohen's $d$ (right-better convention).}
+\[
+  d = \frac{\bar{w} - \bar{r}}{s_{\mathrm{pooled}}},
+  \qquad
+  s_{\mathrm{pooled}}^2
+  = \frac{(n_R-1)s_r^2 + (n_W-1)s_w^2}{n_R + n_W - 2}.
+\]
+Positive values mean \RIGHT{} is better.
+Returns \texttt{NaN} when either sample has fewer than two points or the pooled
+standard deviation is effectively zero. Should be interpreted with caution for
+skewed or outlier-heavy distributions.
+ 
+\subsection{Failure-Rate Comparison}
+ 
+When \texttt{failure\_threshold} $u$ is set, the empirical failure probability
+$\hat{p}_u = \frac{1}{n}\sum_i \mathbf{1}\{d_{N,i}^{\mathrm{best}} > u\}$
+is reported for each method and included in \texttt{statistical\_tests.json}.
+This targets the tail of the performance distribution rather than its center.
+ 
+\subsection{Pairing}
+ 
+The seeds are technically \emph{paired}: \RIGHT{} and \WRONG{} share the same Sobol
+initial design and the same \texttt{torch.manual\_seed} call
+(Contract~\ref{contract:paired}).
+The paired Wilcoxon signed-rank test (now the primary comparison) exploits this
+structure; the Mann--Whitney test is reported as an unpaired secondary check.
+
+\begin{remark}
+\texttt{analyze.py} builds seed-for-seed matched samples
+(\texttt{\_stack\_scalars\_paired}) so the Wilcoxon test only consumes index-for-index
+paired values. The previous ``planned'' status of this test is now resolved:
+\texttt{wilcoxon\_paired\_comparison} is implemented in
+\texttt{common/statistics.py}.
+\end{remark}
+ 
+\subsection{Sign Convention Summary}
+ 
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Quantity & Positive means & Implementation \\
+\midrule
+$\rho_{\mathrm{rb}}$ & \RIGHT{} beats \WRONG{} & exact pairwise \\
+Cohen's $d$ & \RIGHT{} beats \WRONG{} & $\bar{w} - \bar{r}$ / pooled std \\
+MW \texttt{alternative} & \RIGHT{} $<$ \WRONG{} & \texttt{"less"} \\
+\bottomrule
+\end{tabular}
+\end{center}
+ 
+% ============================================================
+\section{Notebook Analysis Roadmap}
+\label{sec:notebook}
+% ============================================================
+ 
+This section provides a step-by-step guide for writing the analysis notebook.
+Each step specifies which output files to read.
+ 
+\subsection{Step 0: Setup and Paths}
+ 
+\begin{itemize}
+  \item Set \texttt{run\_dir} to the target run directory
+        \texttt{results/exp\_a\_target\_matching/runs/<run\_id>/}.
+  \item Set \texttt{benchmark} to the benchmark name (e.g., \texttt{branin\_2d}).
+  \item All aggregate files are under
+        \texttt{<run\_dir>/processed/aggregate/<benchmark>/}.
+  \item All per-seed files are under
+        \texttt{<run\_dir>/processed/per\_seed/<benchmark>/}.
+\end{itemize}
+ 
+\subsection{Step 1: Load and Inspect Configuration}
+ 
+\begin{itemize}
+  \item \textbf{Read:} \texttt{<run\_dir>/config.json},
+        \texttt{<run\_dir>/metadata.json}.
+  \item Verify: benchmark, target, $n_0$, budget, seeds, methods, noise level.
+  \item Check provenance: git commit, UTC timestamp.
+\end{itemize}
+ 
+\subsection{Step 2: Final Performance Summary}
+ 
+\begin{itemize}
+  \item \textbf{Read:} \texttt{processed/aggregate/<benchmark>/final\_performance.json}.
+  \item Display descriptive summary table (mean, median, IQR) for
+        \texttt{final\_best\_target\_distance} and
+        \texttt{final\_target\_simple\_regret} for each method.
+  \item Check failure rates and hitting-time distributions if available.
+  \item Cross-reference with
+        \texttt{processed/aggregate/<benchmark>/statistical\_tests.json}
+        for $p$-values and effect sizes ($\rho_{\mathrm{rb}}$, Cohen's $d$).
+\end{itemize}
+ 
+\subsection{Step 3: Convergence Curves}
+ 
+\begin{itemize}
+  \item \textbf{Read:} \texttt{processed/aggregate/<benchmark>/convergence\_curves.json}.
+  \item Plot the median running-best target regret $\rtarget$ against iteration $t$
+        for both methods, with bootstrap CI bands.
+  \item Optionally overlay mean curves (from the same file if \texttt{mean} was computed).
+  \item Note: the curve matrix per (method, curve type) is shape
+        $(n_{\mathrm{seeds}}, N)$; individual seed curves may be overlaid for
+        qualitative inspection.
+\end{itemize}
+ 
+\subsection{Step 4: Calibration Analysis}
+ 
+\begin{itemize}
+  \item \textbf{Read:} \texttt{processed/aggregate/<benchmark>/calibration\_summary.json}
+        for cross-seed aggregate view.
+  \item Plot NLPD trajectory (per checkpoint) for both methods.
+  \item Compare empirical 95\% coverage and confidence violation rate.
+  \item For per-seed detail, read individual
+        \texttt{processed/per\_seed/<benchmark>/seed\_NNN\_processed.json}:
+        access \texttt{methods["<name>"]["calibrations"][-1]} for the final checkpoint.
+  \item From \texttt{CalibrationPredictionGrid}: plot PIT histogram, QQ-plot of
+        standardized residuals.
+  \item Compare full-grid vs.\ near-target diagnostics; report
+        \texttt{near\_target\_fraction} to understand how much of the test grid is
+        near the target.
+\end{itemize}
+ 
+\subsection{Step 5: Failure and Tail-Risk Analysis}
+ 
+\begin{itemize}
+  \item \textbf{Read:} \texttt{final\_performance.json} (high quantiles
+        $q_{90}$, $q_{95}$, worst run).
+  \item Identify seeds where one method failed (\texttt{failure\_indicator = 1}).
+  \item For representative failing seeds, load the per-seed processed file to inspect
+        convergence curves and calibration trajectories.
+  \item Compare $\hat{p}_u$ between \RIGHT{} and \WRONG{}.
+\end{itemize}
+ 
+\subsection{Step 6: Representative Seed Inspection (1D benchmark)}
+ 
+\begin{itemize}
+  \item \textbf{Read:} one or more
+        \texttt{processed/per\_seed/sine\_trend\_1d/seed\_NNN\_processed.json}.
+  \item From \texttt{CalibrationPredictionGrid}: reconstruct posterior mean/variance
+        plots at selected iterations (e.g., $t \in \{5, 10, 20, 40\}$) for both methods.
+  \item Plot $f$, $|f-T|$, posterior mean, and 95\% credible intervals side by side
+        (Figure A1/A2 basis).
+\end{itemize}
+ 
+\subsection{Step 7: Export Figures}
+ 
+\begin{itemize}
+  \item Save all figures to \texttt{<run\_dir>/figures/} with descriptive names.
+  \item Record which file, method, and seeds each figure uses.
+  \item \textit{Note:} a \texttt{make\_figures.py} script for publication-quality
+        figure generation is \textbf{not yet implemented}; the notebook is the current
+        primary analysis tool.
+\end{itemize}
+ 
+\subsection{Notebook Dependency Map}
+ 
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Notebook step & Primary file(s) to read & Secondary file(s) \\
+\midrule
+Config / provenance & \texttt{config.json}, \texttt{metadata.json} & --- \\
+Final performance & \texttt{final\_performance.json} & \texttt{statistical\_tests.json} \\
+Convergence curves & \texttt{convergence\_curves.json} & per-seed files (optional) \\
+Calibration summary & \texttt{calibration\_summary.json} & per-seed files \\
+Failure / tail risk & \texttt{final\_performance.json} & per-seed files \\
+1D visual inspection & per-seed files & raw files (optional) \\
+\bottomrule
+\end{tabular}
+\end{center}
+ 
+% ============================================================
+\section{Figures and Tables to Produce}
+\label{sec:figures}
+% ============================================================
+ 
+The \texttt{figures/} subdirectory is reserved for publication-quality outputs.
+A \texttt{make\_figures.py} script is \textbf{not yet implemented}; figures are
+currently generated in the analysis notebook.
+ 
+\subsection{Figure A1 --- 1D Mechanism Figure}
+ 
+On \texttt{sine\_trend\_1d}: plot $f$, the target level $T$, the transformed function
+$|f-T|$, the \WRONG{} GP posterior on $|f-T|$, the \RIGHT{} GP posterior on $f$, and
+sampled points at a representative iteration.
+\textbf{Goal:} make visually clear that $|f-T|$ contains artificial kinks even when $f$
+is smooth.
+\textbf{Source:} \texttt{CalibrationPredictionGrid} from a per-seed processed file.
+ 
+\subsection{Figure A2 --- Posterior Snapshots}
+ 
+For selected iterations $t \in \{5, 10, 20, 40\}$ on \texttt{sine\_trend\_1d}:
+plot posterior means and 95\% credible intervals for both methods, reconstructed offline
+from \texttt{ModelSnapshot} state dicts via \texttt{load\_state\_dict\_into}.
+\textbf{Source:} \texttt{CalibrationPredictionGrid} from a per-seed processed file.
+ 
+\subsection{Figure A3 --- Convergence Curves}
+ 
+Median running-best target regret $t \mapsto r_t^{\mathrm{target}}$ over all seeds,
+with 95\% pointwise bootstrap CI.
+Both methods overlaid on the same axes.
+\textbf{Source:} \texttt{convergence\_curves.json}.
+ 
+\subsection{Figure A4 --- Calibration Diagnostics}
+ 
+For each method:
+\begin{itemize}
+  \item NLPD trajectory across calibration checkpoints;
+  \item empirical coverage trajectory;
+  \item PIT histogram at the final checkpoint;
+  \item QQ-plot of standardized residuals at the final checkpoint;
+  \item near-target confidence violation rate.
+\end{itemize}
+\textbf{Source:} \texttt{calibration\_summary.json} (aggregate view);
+per-seed processed files for individual-seed PIT/QQ plots.
+ 
+\subsection{Summary Performance Table}
+ 
+A table with rows = methods, columns = descriptive statistics
+(median $\pm$ IQR, mean $\pm$ SE, $q_{90}$, $q_{95}$, failure rate) for
+\texttt{final\_best\_target\_distance} and \texttt{final\_target\_simple\_regret}.
+Effect sizes ($\rho_{\mathrm{rb}}$, Cohen's $d$) and $p$-values in a companion table.
+\textbf{Source:} \texttt{final\_performance.json}, \texttt{statistical\_tests.json}.
+ 
+% ============================================================
+\section{Code Architecture}
+\label{sec:code}
+% ============================================================
+ 
+\subsection{Design Principles}
+ 
+Three principles organize the codebase:
+\begin{enumerate}
+  \item \textbf{Problem abstraction:} the BO loop talks to a generic
+        \texttt{ProblemSpec}; it does not know whether observations come from an
+        analytic benchmark, a tabular dataset, or a real experiment.
+  \item \textbf{Shared infrastructure:} GP construction, metrics, diagnostics,
+        statistics, logging, and serialization are implemented once in \texttt{common/}
+        and reused across experiments.
+  \item \textbf{Task-specific acquisitions:} acquisition functions encoding a particular
+        SoC scenario live in \texttt{acquisitions/}.
+\end{enumerate}
+ 
+The dependency direction is strictly unidirectional:
+\[
+  \texttt{data/}
+  \;\subset\;
+  \texttt{common/}
+  \;\subset\;
+  \texttt{benchmarks/},\;\texttt{acquisitions/}
+  \;\subset\;
+  \texttt{experiments/}.
+\]
+ 
+\subsection{Directory Layout}
+ 
+\begin{lstlisting}
+bayesian-optimization-separation-concerns/
+|-- common/
+|   |-- problems.py          # ProblemSpec abstract base + Observation
+|   |-- models.py            # GP construction, fitting, state-dict I/O
+|   |-- initial_design.py    # Sobol initial design
+|   |-- acquisition_utils.py # Wrappers around optimize_acqf
+|   |-- metrics.py           # target-distance / regret / hitting-time
+|   |-- diagnostics.py       # NLPD, coverage, PIT, residuals, near-target
+|   |-- statistics.py        # Across-seed aggregation + pairwise tests
+|   |-- logging.py           # RunLogger: run directory lifecycle
+|   `-- serialization.py     # Tensor/JSON/CSV/Pickle helpers
+|
+|-- benchmarks/
+|   |-- synthetic.py         # SyntheticBenchmark base + near_target_test_set
+|   |-- toy.py               # 8 benchmarks (4 standard + 4 diagnostic 1D)
+|   `-- __init__.py          # BENCHMARK_REGISTRY + build_benchmark(config)
+|
+|-- acquisitions/
+|   `-- target_matching.py   # TargetMatchingUCB + WrongTargetMatchingUCB
+|
+|-- data/
+|   |-- raw.py               # RawSeedData schema
+|   `-- processed.py         # ProcessedSeedData, TestGrid, CalibrationReport
+|
+|-- experiments/
+|   `-- exp_a_target_matching/
+|       |-- run.py           # Stage 1: generates raw seed JSON
+|       |-- process.py       # Stage 2: builds processed per-seed JSON
+|       |-- analyze.py       # Stage 3: builds aggregate JSON
+|       |-- configs/         # 12 YAML configs (one per benchmark / variant)
+|       `-- notebooks/       # Exp_A_analysis_{sine,forrester,branin,hartmann}.ipynb
+|
+|-- scripts/                 # run_all_cpu.sh, process_last_runs.sh, smoke wrapper
+|-- hpc/narval/              # Reserved for SLURM job scripts (currently empty)
+|-- results/                 # One subtree per experiment / run
+|-- CLAUDE.md, README.md, requirements.txt
+\end{lstlisting}
+ 
+\subsection{\texttt{common/} --- Reusable Infrastructure}
+ 
+\paragraph{\texttt{common/problems.py}.}
+\begin{itemize}
+  \item \texttt{Observation}: dataclass $(X,\;y_{\mathrm{obs}},\;f_{\mathrm{noiseless}},\;
+        \mathrm{metadata})$. Shapes validated in \texttt{\_\_post\_init\_\_}.
+  \item \texttt{ProblemSpec(ABC)}: holds \texttt{name}, \texttt{dim}, \texttt{bounds},
+        \texttt{problem\_type}, \texttt{default\_noise\_std}.
+        Entry point \texttt{observe(X)} validates inputs via \texttt{prepare\_X} before
+        delegating to the abstract \texttt{\_observe\_prepared(X)}.
+        Overridable helpers: \texttt{has\_noiseless()},
+        \texttt{oracle\_target\_distance(T)}.
+\end{itemize}
+ 
+\paragraph{\texttt{common/models.py}.}
+\begin{itemize}
+  \item \texttt{GPModelConfig}: \texttt{noise\_std} (\texttt{None} $\Rightarrow$
+        \texttt{SingleTaskGP}; \texttt{float} $\Rightarrow$ \texttt{FixedNoiseGP}),
+        \texttt{normalize\_input}, \texttt{standardize\_output}, \texttt{kernel}.
+  \item \texttt{GPModelBuilder}: \texttt{.construct(X, Y)} (no fitting),
+        \texttt{.fit(X, Y)} (construct + MLL), \texttt{.predict(model, X)},
+        \texttt{.extract\_hyperparameters(model)}.
+  \item \texttt{serialize\_state\_dict(model)} and
+        \texttt{load\_state\_dict\_into(model, serial)}: JSON-safe round-trip,
+        strict key matching.
+\end{itemize}
+ 
+\paragraph{\texttt{common/initial\_design.py}.}
+Single function: \texttt{sobol\_design(bounds, n, seed)} returns a deterministic
+scrambled Sobol grid.
+ 
+\paragraph{\texttt{common/acquisition\_utils.py}.}
+Generic wrappers \texttt{optimize\_acquisition} and \texttt{suggest\_next\_point}
+around \texttt{botorch.optim.optimize\_acqf}, plus \texttt{clamp\_variance}.
+ 
+\paragraph{\texttt{common/metrics.py}.}
+Pure stateless functions: \texttt{target\_distance}, \texttt{target\_best\_so\_far},
+\texttt{target\_simple\_regret}, \texttt{target\_cumulative\_regret},
+\texttt{hitting\_time}, \texttt{area\_under\_curve}, and the convenience wrapper
+\texttt{final\_run\_summary(f\_values, target, oracle\_best, epsilon,
+failure\_threshold)} that returns the dictionary consumed by
+\texttt{process.py::\_final\_scalars}.
+ 
+\paragraph{\texttt{common/diagnostics.py}.}
+\texttt{gaussian\_nlpd}, \texttt{standardized\_residuals},
+\texttt{empirical\_coverage}, \texttt{pit\_values},
+\texttt{confidence\_bound\_violation\_rate};
+combined into \texttt{calibration\_summary(y\_true, mean, std)} and
+\texttt{near\_target\_calibration\_summary}.
+Joint-posterior diagnostics: \texttt{joint\_gaussian\_nlpd} and
+\texttt{posterior\_joint\_calibration\_summary} (Cholesky-stabilised joint NLPD).
+The orchestrator \texttt{build\_calibration\_report\_dict} assembles the global,
+near-target, joint, and prediction-grid blocks for one snapshot.
+Optional KS tests: \texttt{ks\_test\_standard\_normal},
+\texttt{ks\_test\_uniform}.
+
+\paragraph{\texttt{common/statistics.py}.}
+\texttt{summarize\_sample} (descriptive), \texttt{failure\_rate},
+\texttt{wilcoxon\_paired\_comparison} (paired primary test),
+\texttt{mann\_whitney\_comparison}, \texttt{rank\_biserial\_correlation},
+\texttt{cohens\_d\_right\_better}, \texttt{bootstrap\_ci\_curves} (pointwise),
+\texttt{bootstrap\_uniform\_band} (simultaneous), and
+\texttt{aggregate\_convergence\_curves} (dispatches on
+\texttt{band\_type} $\in\{$\texttt{pointwise}, \texttt{uniform}, \texttt{both}$\}$).
+Sign convention: smaller is better; positive effect sizes mean \RIGHT{} beats \WRONG{}.
+ 
+\paragraph{\texttt{common/logging.py}.}
+\texttt{RunLogger} owns the run-directory lifecycle:
+\texttt{create}, \texttt{save\_config},
+\texttt{save\_metadata} (auto-captures git commit, dirty flag, \texttt{sys.argv},
+Python version, platform, UTC timestamp),
+\texttt{save\_seed\_result},
+\texttt{processed\_per\_seed\_path},
+\texttt{processed\_aggregate\_path},
+\texttt{setup\_file\_logger}.
+ 
+\paragraph{\texttt{common/serialization.py}.}
+Pure format conversion: \texttt{tensor\_to\_list}, \texttt{tensors\_to\_lists},
+\texttt{save\_json}, \texttt{load\_json}, \texttt{save\_csv}, \texttt{load\_csv},
+\texttt{save\_pickle}.
+ 
+\subsection{\texttt{benchmarks/}}
+\label{sec:code-benchmarks}
+ 
+\texttt{benchmarks/synthetic.py} defines the abstract \texttt{SyntheticBenchmark} class
+extending \texttt{ProblemSpec} with i.i.d.\ Gaussian noise, the \texttt{test\_set}
+helper, the \texttt{near\_target\_test\_set} rejection sampler, and a
+\texttt{from\_config} entry point (with strict unknown-key checking).
+The eight concrete benchmarks (\texttt{SineTrend1D}, \texttt{Forrester1D},
+\texttt{Branin2D}, \texttt{Hartmann6D}, \texttt{Linear1D}, \texttt{Exponential1D},
+\texttt{GaussianTrap1D}, \texttt{DampedOscillatoryTrap1D}) live in
+\texttt{benchmarks/toy.py}.
+The module-level \texttt{BENCHMARK\_REGISTRY: dict[str, type[SyntheticBenchmark]]}
+and the helper \texttt{build\_benchmark(config)} (both exported from
+\texttt{benchmarks/\_\_init\_\_.py}) instantiate a benchmark from a YAML config
+(flat or nested layout) or from per-seed metadata.
+ 
+\subsection{\texttt{acquisitions/target\_matching.py}}
+\label{sec:code-acq}
+ 
+Two BoTorch acquisitions, both subclasses of \texttt{AnalyticAcquisitionFunction}
+with $q = 1$:
+ 
+\begin{lstlisting}[language=Python]
+class TargetMatchingUCB(AnalyticAcquisitionFunction):
+    """RIGHT. Trained model: GP on raw y_obs ~ f.
+       Maximizes: alpha = -|mu_f - T| + sqrt(beta) * sigma_f."""
+    def __init__(self, model, target, beta=2.0): ...
+ 
+    @t_batch_mode_transform()
+    def forward(self, X):
+        posterior = self.model.posterior(X)
+        mean  = posterior.mean
+        sigma = posterior.variance.clamp_min(1e-10).sqrt()
+        return -(mean - self.target).abs() + math.sqrt(self.beta) * sigma
+ 
+ 
+class WrongTargetMatchingUCB(AnalyticAcquisitionFunction):
+    """WRONG. Trained model: GP on g(x) = |y_obs - T|.
+       Maximizes: alpha = -mu_g + sqrt(beta) * sigma_g.
+       Note: T is baked into training data, not passed here."""
+    def __init__(self, model, beta=2.0): ...
+ 
+    @t_batch_mode_transform()
+    def forward(self, X):
+        posterior = self.model.posterior(X)
+        mean  = posterior.mean
+        sigma = posterior.variance.clamp_min(1e-10).sqrt()
+        return -mean + math.sqrt(self.beta) * sigma
+\end{lstlisting}
+ 
+\subsection{\texttt{data/} --- On-Disk JSON Schemas}
+ 
+\texttt{data/raw.py} and \texttt{data/processed.py} contain only dataclasses with
+\texttt{to\_dict}/\texttt{from\_dict} round-trip methods.
+They depend only on the standard library.
+This lets \texttt{process.py} and \texttt{analyze.py} parse on-disk artifacts
+symbolically without re-implementing the schema.
+ 
+\subsection{\texttt{experiments/exp\_a\_target\_matching/}}
+ 
+\paragraph{\texttt{run.py}.}
+Entry point:
+\texttt{python -m experiments.exp\_a\_target\_matching.run
+  --config <YAML> [--tag] [--results-root] [--device]}.
+\begin{enumerate}
+  \item Parse arguments, load YAML, resolve device.
+  \item Look up benchmark via \texttt{BENCHMARK\_REGISTRY[name]}.
+  \item Create run directory; save config and metadata.
+  \item For each seed: \texttt{\_run\_one\_seed} draws the Sobol initial design, obtains
+        shared noisy observations, and loops over methods.
+        \texttt{\_run\_one\_method} runs the BO loop for \texttt{budget} steps,
+        appending one \texttt{StepRecord} and one \texttt{ModelSnapshot} per iteration.
+  \item Save seed result via \texttt{logger.save\_seed\_result}.
+\end{enumerate}
+ 
+\paragraph{\texttt{process.py}.}
+Entry point:
+\texttt{python -m experiments.exp\_a\_target\_matching.process
+  --run-dir <run\_dir> [--benchmark ...] [--seed ...] [--device cpu|cuda]}.
+For each discovered \texttt{raw/<bench>/seed\_NNN.json}:
+\begin{enumerate}
+  \item Reconstruct the full $N$-step evaluation history.
+  \item Compute \texttt{FinalScalars} via \texttt{common.metrics.final\_run\_summary}.
+  \item Compute \texttt{ConvergenceCurves} via the four target-distance/regret helpers.
+  \item For each retained \texttt{ModelSnapshot}: reconstruct GP via
+        \texttt{construct + load\_state\_dict\_into} (no MLL refitting),
+        evaluate posterior on $X_{\mathrm{test}}$, compute calibration summaries,
+        store \texttt{CalibrationPredictionGrid}.
+  \item Wrap in \texttt{ProcessedSeedData} and write per-seed JSON.
+\end{enumerate}
+ 
+\paragraph{\texttt{analyze.py}.}
+Entry point:
+\texttt{python -m experiments.exp\_a\_target\_matching.analyze
+  --run-dir <run\_dir> [--benchmark ...] [--statistic mean|median]
+  [--confidence FLOAT] [--n-bootstrap INT]}.
+For each benchmark, loads all per-seed processed JSON files into
+\texttt{ProcessedSeedData} objects and writes the four aggregate JSON files.
+ 
+\subsection{\texttt{scripts/} and \texttt{hpc/narval/}}
+
+\texttt{scripts/} holds convenience wrappers: \texttt{run\_all\_cpu.sh} (run every
+config), \texttt{process\_last\_runs.sh} (process + analyze the most recent runs),
+and \texttt{smoke\_test\_exp\_a\_workflow.py} (legacy end-to-end smoke wrapper).
+\texttt{hpc/narval/} is reserved for SLURM job scripts for the Narval compute
+cluster but is currently empty; full-scale runs are launched via the
+\texttt{scripts/} wrappers.
+ 
+% ============================================================
+\section{Key Experimental Contracts and Invariants}
+\label{sec:contracts}
+% ============================================================
+ 
+The following contracts are explicitly enforced by the code.
+A violation of any contract would invalidate the scientific validity of the pipeline.
+ 
+\begin{contract}[BO trains on $y_{\mathrm{obs}}$ only]
+The BO algorithm never sees $f_{\mathrm{noiseless}}$.
+\texttt{run.py} feeds \texttt{spec["transform"](Y\_raw, T)} to
+\texttt{GPModelBuilder.fit}.
+The noiseless value is recorded in \texttt{StepRecord} only for post-hoc analysis.
+\end{contract}
+ 
+\begin{contract}[Paired initial design across methods]
+\label{contract:paired-ref}
+Restates Contract~\ref{contract:paired}.
+The \texttt{InitialDesign} is stored at the seed level of the raw JSON, produced once
+before any method runs.
+\end{contract}
+ 
+\begin{contract}[Calibration uses load-only reconstruction]
+Restates Contract~\ref{contract:no-refit}.
+\texttt{process.py} rebuilds GPs via \texttt{construct + load\_state\_dict\_into}.
+MLL is never refitted. The offline GP is bit-identical to the one used during BO.
+\end{contract}
+ 
+\begin{contract}[Raw / processed separation]
+Raw files contain trajectory facts only.
+\texttt{process.py} reads at most one raw seed file at a time.
+\texttt{analyze.py} reads only processed per-seed files, never raw files.
+\end{contract}
+ 
+\begin{contract}[Held-out grid is shared and deterministic]
+\texttt{benchmark.test\_set(n, seed)} is a pure function of $(\text{benchmark}, n,
+\text{seed})$.
+The same $X_{\mathrm{test}}$ is used for both methods and across all BO seeds within
+a run.
+\end{contract}
+ 
+\begin{contract}[Method-aware $y_{\mathrm{train}}$ reconstruction]
+\texttt{MethodTrajectory.train\_label} carries the transform recipe
+(\texttt{"y\_obs"} vs.\ \texttt{"abs(y\_obs - target)"}).
+\texttt{process.py::\_reconstruct\_X\_Y} dispatches on this string and is the single
+place that knows the transform.
+\end{contract}
+ 
+\begin{contract}[Run provenance]
+\texttt{RunLogger.save\_metadata} records UTC timestamp, Python version, platform,
+git commit, dirty flag, and \texttt{sys.argv}.
+\end{contract}
+ 
+\begin{contract}[Smaller is better, sign convention]
+Mann--Whitney is called with \texttt{alternative = "less"}.
+Positive $\rho_{\mathrm{rb}}$ and positive Cohen's $d$ both mean \RIGHT{} beats
+\WRONG{}.
+\end{contract}
+ 
+% ============================================================
+\section{Expected Outcome}
+\label{sec:expected}
+% ============================================================
+ 
+The goal is not merely to show that \RIGHT{} performs better, but to trace the failure
+mechanism of \WRONG{} through the full diagnostic chain.
+ 
+\textbf{Expected behavior of \WRONG:}
+\begin{itemize}
+  \item Distorted posterior behavior near the target level set (kinks in $|f-T|$).
+  \item Overconfident uncertainty near kinks; elevated near-target confidence
+        violation rate.
+  \item Worse calibration, especially in the near-target diagnostic.
+  \item Potentially worse final optimization performance.
+  \item Sensitivity to the initial Sobol design.
+\end{itemize}
+ 
+\textbf{Expected behavior of \RIGHT:}
+\begin{itemize}
+  \item Smooth GP posterior on the raw function $f$.
+  \item Meaningful posterior uncertainty throughout the domain.
+  \item Target handling at the acquisition level, without distorting the surrogate.
+  \item More graceful degradation across initializations and noise realizations.
+\end{itemize}
+ 
+% ============================================================
+\section{Future Extensions and Planned Additions}
+\label{sec:future}
+% ============================================================
+ 
+The following items are explicitly planned but not yet implemented.
+They are listed here to prevent confusion between the current state and the roadmap.
+ 
+Several items previously listed here are now \emph{implemented} and described in
+the body: the paired Wilcoxon signed-rank test
+(\S\,\ref{sec:stats}), the simultaneous (uniform) bootstrap bands
+(\S\,\ref{sec:aggregate}), and the additional diagnostic benchmarks
+(\S\,\ref{sec:expA}). The remaining roadmap items are:
+
+\begin{description}
+
+  \item[\texttt{make\_figures.py}.]
+  A dedicated script for generating publication-quality figures
+  (Figures A1--A4) from the processed and aggregate outputs.
+  Currently, all figures are produced in the analysis notebooks
+  (\texttt{notebooks/Exp\_A\_analysis\_*.ipynb}).
+
+  \item[Target-aware Expected Improvement (target-EI).]
+  A more refined SoC-compliant acquisition computing
+  $\mathrm{EI}_T(x) = \mathbb{E}_t[\max\{0, \tau_t - |f(x)-T|\}]$
+  under the posterior on the raw $f$.
+  A Monte Carlo implementation sketch exists in the older design document.
+  To be added to \texttt{acquisitions/target\_matching.py} once the main pipeline is
+  stable.
+
+  \item[Full-scale paper seeds.]
+  The current configurations use 100 seeds; the final paper configuration may use
+  a larger number (target TBD).
+
+  \item[Full-scale benchmark sweep.]
+  All eight benchmarks have configs in \texttt{configs/}; the remaining work is to
+  run, process, and analyze the full sweep and consolidate the cross-benchmark
+  tables.
+
+  \item[Experiments B and C.]
+  The codebase is designed to support multi-objective SoC (Experiment B) and
+  prior-knowledge SoC (Experiment C).
+  \texttt{acquisitions/prior\_guided.py}, \texttt{acquisitions/multi\_objective.py},
+  and the corresponding experiment directories are not yet implemented.
+
+  \item[Real-data problems.]
+  \texttt{common/real\_data.py} is planned (not yet created).
+  Real-data experiments are future work after Experiment A is validated.
+
+\end{description}
+ 
+% ============================================================
+% Extension cookbook (appendix-style)
+% ============================================================
+\section*{Appendix: Extension Cookbook}
+\addcontentsline{toc}{section}{Appendix: Extension Cookbook}
+\label{sec:cookbook}
+ 
+\begin{description}
+ 
+  \item[New benchmark.]
+  Add a class to \texttt{benchmarks/toy.py} inheriting \texttt{SyntheticBenchmark};
+  implement \texttt{.f(X)} and optionally \texttt{.oracle\_target\_distance(T)};
+  register in \texttt{BENCHMARK\_REGISTRY}.
+ 
+  \item[New method.]
+  Add the acquisition class to \texttt{acquisitions/};
+  add a spec entry to \texttt{\_METHOD\_SPECS} in \texttt{run.py} with
+  \texttt{train\_label}, \texttt{transform}, \texttt{acq\_builder},
+  \texttt{use\_fixed\_noise}.
+  Extend \texttt{process.py::\_reconstruct\_X\_Y} if \texttt{train\_label} is new.
+  Use the \texttt{right\_*}/\texttt{wrong\_*} prefix so \texttt{analyze.py} pairs it
+  automatically.
+ 
+  \item[New final scalar metric.]
+  Extend \texttt{common.metrics.final\_run\_summary};
+  add the field to \texttt{data.processed.FinalScalars};
+  populate in \texttt{process.py::\_final\_scalars};
+  add the key to \texttt{analyze.py::\_FINAL\_SCALAR\_KEYS}.
+ 
+  \item[New calibration diagnostic.]
+  Add the function to \texttt{common.diagnostics} and include it in the
+  \texttt{calibration\_summary} dictionary;
+  add the key to \texttt{\_CALIB\_TEST\_GRID\_KEYS} in \texttt{analyze.py}.
+ 
+  \item[New statistical test.]
+  Add a pure function to \texttt{common.statistics};
+  call it from \texttt{analyze.py::\_build\_statistical\_tests}.
+ 
+  \item[New configuration field.]
+  Add the key to the YAML;
+  read it via \texttt{config.get(...)} in the appropriate stage;
+  store essential provenance in \texttt{metadata.json}.
+ 
+\end{description}
+ 
+\end{document}

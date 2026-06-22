@@ -1,0 +1,75 @@
+# DIAGNOSTIC config: isolate the effect of P-BO-style dynamic standardization
+# on the lambda methods, WITHOUT touching the experimental protocol.
+#
+# Same benchmark geometry, same BAD prior (centered on the shallow trap), same
+# initial_design_size=1 and noise_std=0 as double_well_1d_bad_prior.yaml.  The
+# ONLY additions are the two standardized lambda methods, run side by side with
+# the raw ones on a small set of seeds (mix of raw-adaptive failures 8/9/36/50
+# and successes 6/11 from the prior diagnostic).  Short budget for a quick test.
+
+experiment:            exp_b_prior_guided
+tag:                   diag_double_well_standardized
+
+benchmark:
+  name: double_gaussian_well_1d
+  deep_center:    0.70
+  deep_depth:     1.00
+  deep_width:     0.08
+  shallow_center: 0.25
+  shallow_depth:  0.40
+  shallow_width:  0.12
+
+noise_std:             0.0
+
+seeds:                 [6, 8, 9, 11, 36, 50]
+
+prior:
+  label:       bad
+  center:      [0.25]
+  lengthscale: 0.10
+
+alpha:                 0.5
+beta:                  2.0
+lambda_init:           1.0
+
+initial_design_size:   1
+budget:                40
+
+num_restarts:          20
+raw_samples:           1024
+device:                cpu
+
+methods:
+  - lambda_pi_fixed_ucb
+  - lambda_pi_adaptive_ucb
+  - lambda_pi_fixed_standardized_ucb
+  - lambda_pi_adaptive_standardized_ucb
+
+epsilon:               0.35
+
+model:
+  use_fixed_noise:     true
+  normalize_input:     true
+  standardize_output:  true
+
+test_grid:
+  n_test:              512
+  seed:                123
+  calibration_every:   10
+
+calibration:
+  compute_global:        true
+  compute_prior_region:  true
+  prior_region_threshold: 0.5
+  compute_joint:         false
+  store_predictions:     false
+
+aggregate:
+  # Compare each method against the RAW adaptive method, so the headline
+  # statistical test is "standardized vs raw" for the adaptive lambda case.
+  baseline_method:                lambda_pi_adaptive_ucb
+  convergence_band_type:          pointwise
+  calibration_band_type:          pointwise
+  residual_band_type:             uniform
+  n_bootstrap:                    2000
+  confidence:                     0.95

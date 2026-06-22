@@ -1,0 +1,82 @@
+# Sanity rerun (Experiment B, double_gaussian_well_1d, GOOD prior): few seeds,
+# moderate budget, raw oriented scale.
+#
+# Benchmark geometry (minimization), oriented to maximization (g = -f_raw, no
+# [0, 1] rescaling):
+#   - deep well    at x = 0.70 (depth 1.0)  -> oriented peak f_opt ~= 1.00
+#   - shallow well at x = 0.25 (depth 0.6)  -> oriented local peak ~= 0.60
+# Confirms vanilla UCB can find the deep well in a fair fraction of seeds and
+# that the good prior helps without a scale bug.
+
+experiment:            exp_b_prior_guided
+tag:                   sanity_double_well_1d
+
+benchmark:
+  name: double_gaussian_well_1d
+  deep_center:    0.70
+  deep_depth:     1.00
+  deep_width:     0.08
+  shallow_center: 0.25
+  shallow_depth:  0.60
+  shallow_width:  0.12
+
+# Observation noise on the RAW oriented scale (depth scale ~= 1.0).
+noise_std:             0.02
+
+seeds:                 [1, 2, 3, 4, 5]
+
+prior:
+  label:       bad
+  center:      [0.25]
+  lengthscale: 0.10
+
+alpha:                 0.25
+beta:                  7.0
+lambda_init:           1.0
+
+initial_design_size:   1
+budget:                30
+
+num_restarts:          20
+raw_samples:           1024
+device:                cpu
+
+methods:
+  - vanilla_ucb
+  - alpha_pi_ucb
+  - lambda_pi_fixed_ucb
+  - lambda_pi_adaptive_ucb
+  - lambda_pi_fixed_standardized_ucb
+  - lambda_pi_adaptive_standardized_ucb
+
+# Hitting-time tolerance on the simple regret (RAW scale; between 0 and the
+# ~0.40 shallow-well gap, so it separates escaping the trap from staying).
+epsilon:               0.35
+
+model:
+  use_fixed_noise:     true
+  normalize_input:     true
+  # ON for vanilla / alpha-pi, forced OFF for the prior-to-the-mean methods.
+  standardize_output:  true
+
+test_grid:
+  n_test:              512
+  seed:                123
+  calibration_every:   5
+
+calibration:
+  compute_global:        true
+  compute_prior_region:  true
+  prior_region_threshold: 0.5
+  compute_joint:         false
+  store_predictions:     true
+
+aggregate:
+  baseline_method:                vanilla_ucb
+  convergence_band_type:          pointwise
+  calibration_band_type:          pointwise
+  residual_band_type:             uniform
+  n_bootstrap:                    2000
+  confidence:                     0.95
+  aggregate_calibration_curves:   true
+  aggregate_instantaneous_curves: true

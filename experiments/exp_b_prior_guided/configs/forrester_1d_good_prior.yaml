@@ -1,4 +1,5 @@
-# Experiment B (forrester_1d) with a GOOD prior: center at the global maximizer of f_norm (x* of Forrester).
+# Experiment B (forrester_1d) with a GOOD prior: center at the global optimizer x* of Forrester
+# (raw oriented objective g = -f_raw, f_opt ~= 6.02 at x* ~= 0.7572).
 
 experiment:            exp_b_prior_guided
 tag:                   forrester_1d_good_prior
@@ -6,14 +7,14 @@ tag:                   forrester_1d_good_prior
 benchmark:
   name: forrester_1d
 
-# Observation noise, on the NORMALIZED scale (f_norm in [0, 1]).
-noise_std:             0.01
+# Observation noise on the RAW oriented scale (g = -f_raw, f_opt ~= 6.02).
+noise_std:             0.5
 
-# Normalization defaults come from benchmarks.normalized.KNOWN_OUTPUT_RANGES;
-# override here only if needed:
-# normalization:
-#   f_min: ...
-#   f_max: ...
+# Orientation defaults come from benchmarks.oriented.KNOWN_OUTPUT_RANGES
+# (raw inner extrema + direction); override here only if needed:
+# orientation:
+#   f_min: -6.020740055735769   # raw inner minimum
+#   f_max: 15.829731945974109   # raw inner maximum
 #   direction: min
 
 seeds:                 [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50]
@@ -29,7 +30,7 @@ alpha:                 0.5    # prior weight of alpha_pi_ucb
 beta:                  2.0    # UCB exploration parameter (all methods)
 lambda_init:           1.0    # initial lambda of the prior-mean GP
 
-initial_design_size:   4
+initial_design_size:   1    # matches Exp A (forrester_1d_full.yaml)
 budget:                50
 
 num_restarts:          20
@@ -41,22 +42,28 @@ methods:
   - alpha_pi_ucb
   - lambda_pi_fixed_ucb
   - lambda_pi_adaptive_ucb
+  - lambda_pi_fixed_standardized_ucb
+  - lambda_pi_adaptive_standardized_ucb
 
-# Hitting-time tolerance on the simple regret (normalized scale).
-epsilon:               0.05
+# Hitting-time tolerance on the simple regret (RAW scale; ~5% of the
+# oriented range ~21.85).
+epsilon:               1.0
 
 model:
   use_fixed_noise:     true
   normalize_input:     true
-  # Outputs are already normalized to [0, 1]; standardization must stay off
-  # so the prior mean lambda * pi(x) lives on the observation scale.
-  standardize_output:  false
+  # Standardize(Y) is applied PER METHOD in run.py: ON for vanilla / alpha-pi
+  # (internal GP transform), OFF for the prior-to-the-mean methods (so the
+  # mean function lambda * f_prior stays on the target scale).  This flag only
+  # affects the standard-GP methods.
+  standardize_output:  true
 
 test_grid:
   n_test:              2048
   seed:                123
-  calibration_every:   5
+  calibration_every:   1
   m_test_joint_distrib: 64
+  m_test_joint_prior_region: 64
   joint_nlpd_jitter:   1.0e-6
 
 calibration:

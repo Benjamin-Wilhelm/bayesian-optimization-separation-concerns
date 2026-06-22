@@ -7,7 +7,8 @@ Across-seed aggregation lives in Experiment B's ``analyze.py``.
 Differences from :mod:`data.processed` (Experiment A):
 
 - target-matching metrics are replaced by standard BO metrics under the
-  **maximization** convention on normalized outputs (``f_opt = 1.0``):
+  **maximization** convention on the raw oriented objective (``f_opt =
+  max_x g(x)`` on the natural scale):
 
   .. math::
 
@@ -56,8 +57,8 @@ class PriorFinalScalars:
     """Scalar end-of-run BO metrics for one method under one seed.
 
     All quantities are computed over the **full evaluation history**
-    (initial design + BO budget) on noiseless normalized values
-    ``f_noiseless`` (maximization convention, oracle ``f_opt``).
+    (initial design + BO budget) on the noiseless oriented values
+    ``f_noiseless`` (raw scale, maximization convention, oracle ``f_opt``).
 
     Attributes:
         n_evaluations: ``initial_design_size + budget``.
@@ -293,8 +294,8 @@ class ProcessedPriorSeedData:
 
     Attributes:
         metadata: Verbatim copy of the raw seed metadata dict (contains the
-            prior and normalization configuration).
-        f_opt: Oracle maximum of the normalized objective (``1.0``).
+            prior and orientation configuration).
+        f_opt: Oracle maximum of the oriented objective on the raw scale.
         epsilon: Hitting-time tolerance on the simple regret, or ``None``.
         test_grid: Shared held-out grid description.
         methods: Per-method processed data, keyed by method name.

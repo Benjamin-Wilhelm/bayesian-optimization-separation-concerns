@@ -1,18 +1,29 @@
 """Experiment B — prior-guided BO.  Raw data generation.
 
 Compares four ways of incorporating a Gaussian domain prior into GP-BO on
-output-normalized benchmarks (maximization, ``f_norm in [0, 1]``):
+benchmarks kept on their **raw (natural) scale**, only oriented to a
+maximization problem (see :class:`benchmarks.oriented.OrientedBenchmark`):
 
 - ``vanilla_ucb``            GP-UCB without prior (baseline).
-- ``alpha_pi_ucb``           SoC-compliant: generic GP; the prior reshapes
-                             the acquisition only.
-- ``lambda_pi_fixed_ucb``    Prior in the GP mean, ``f ~ GP(1 * pi, k)``.
-- ``lambda_pi_adaptive_ucb`` Prior in the GP mean, ``f ~ GP(lambda * pi, k)``
-                             with ``lambda`` learned jointly with the kernel
-                             hyperparameters by MLL maximization.
+- ``alpha_pi_ucb``           SoC-compliant: generic GP; the prior ``pi`` (in
+                             ``[0, 1]``) reshapes the acquisition only.
+- ``lambda_pi_fixed_ucb``    Prior in the GP mean, ``f ~ GP(1 * f_prior, k)``.
+- ``lambda_pi_adaptive_ucb`` Prior in the GP mean,
+                             ``f ~ GP(lambda * f_prior, k)`` with ``lambda``
+                             learned jointly with the kernel hyperparameters
+                             by MLL maximization.
 
-The GP always models the original objective ``f`` and trains on raw noisy
-``y_obs``; no method runs BO on residuals.
+Here ``f_prior(x) = baseline + amplitude * pi(x)`` lives on the observation
+(``y``) scale (see :class:`common.priors.PriorMeanModule`).  The GP always
+models the original objective ``f`` and trains on raw noisy ``y_obs``; no
+method runs BO on residuals.
+
+Standardization policy (per method): the standard-GP methods
+(``vanilla_ucb`` / ``alpha_pi_ucb``) use ``Standardize(Y)`` since the raw
+objective can have an arbitrary scale; the prior-to-the-mean methods disable
+``Standardize(Y)`` so the mean function ``lambda * f_prior`` stays on the
+same scale as the targets (otherwise ``lambda`` would absorb a scale
+mismatch instead of learning a genuine prior/objective alignment).
 
 This script writes ONLY raw experimental data.  Per-seed metrics and
 calibration live in ``process.py``; across-seed statistics in ``analyze.py``.
@@ -49,7 +60,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from acquisitions.prior_guided import AlphaPiUCB, LambdaPriorUCB, VanillaUCB
-from benchmarks.normalized import NormalizedBenchmark, build_normalized_benchmark
+from benchmarks.oriented import OrientedBenchmark, build_oriented_benchmark
 from common.initial_design import sobol_design
 from common.logging import RunLogger
 from common.models import GPModelConfig, serialize_state_dict
@@ -100,6 +111,29 @@ _METHOD_SPECS: dict[str, dict[str, Any]] = {
             model=model, beta=beta
         ),
     },
+    # P-BO-style standardized variants: the GP uses Standardize(Y) and the
+    # prior weight pi(x) is itself z-scored (see common.priors), so lambda
+    # couples two O(1) standardized quantities instead of absorbing the raw
+    # objective scale.  Same acquisition (UCB on the de-standardized posterior
+    # of f) as the raw lambda methods; only the model's internal scaling
+    # differs.  Kept as separate methods so the raw versions are untouched and
+    # the two can be compared side by side.
+    "lambda_pi_fixed_standardized_ucb": {
+        "model_kind":            "prior_mean_gp",
+        "learn_lambda":          False,
+        "standardize_prior_mean": True,
+        "acq_builder":  lambda model, prior, alpha, beta: LambdaPriorUCB(
+            model=model, beta=beta
+        ),
+    },
+    "lambda_pi_adaptive_standardized_ucb": {
+        "model_kind":            "prior_mean_gp",
+        "learn_lambda":          True,
+        "standardize_prior_mean": True,
+        "acq_builder":  lambda model, prior, alpha, beta: LambdaPriorUCB(
+            model=model, beta=beta
+        ),
+    },
 }
 
 
@@ -109,7 +143,7 @@ _METHOD_SPECS: dict[str, dict[str, Any]] = {
 
 def make_model_builder(
     config: dict[str, Any],
-    problem: NormalizedBenchmark,
+    problem: OrientedBenchmark,
     prior: GaussianPrior,
     method_name: str,
 ) -> PriorGPModelBuilder:
@@ -119,9 +153,21 @@ def make_model_builder(
     reconstruction) so the model shape is identical in both stages.
 
     Model defaults for Experiment B: fixed known noise, fixed-bounds input
-    normalization, **no** outcome standardization (outputs are already
-    normalized to [0, 1] and a Standardize transform would distort the
-    meaning of the prior mean ``lambda * pi``).
+    normalization.  Outcome standardization is decided **per method**, not by
+    a global flag:
+
+    - standard-GP methods (``vanilla_ucb`` / ``alpha_pi_ucb``) use
+      ``Standardize(Y)`` (the raw objective scale is arbitrary; this is a
+      purely internal GP transform that does not touch the benchmark or the
+      regret);
+    - prior-to-the-mean methods (``lambda_pi_*``) disable ``Standardize(Y)``
+      so the mean function ``lambda * f_prior`` stays on the target scale.
+
+    ``model.standardize_output`` in the config (default ``True``) only affects
+    the standard-GP methods; it is forced to ``False`` for prior-mean methods.
+    For prior-mean methods the prior mean is built on the ``y`` scale via
+    ``f_prior(x) = baseline + amplitude * pi(x)`` with ``(baseline,
+    amplitude)`` from :meth:`OrientedBenchmark.prior_mean_scale`.
     """
     if method_name not in _METHOD_SPECS:
         raise ValueError(f"Unknown method '{method_name}'.  "
@@ -131,18 +177,40 @@ def make_model_builder(
 
     use_fixed_noise = bool(model_cfg.get("use_fixed_noise", True))
     noise_std = float(problem.default_noise_std or 0.0)
+    is_prior_mean = spec["model_kind"] == "prior_mean_gp"
+    standardize_prior_mean = bool(spec.get("standardize_prior_mean", False))
+
+    # Per-method standardization:
+    #   - standardized prior-mean methods REQUIRE Standardize(Y) (the prior
+    #     weight is z-scored, so lambda couples two standardized quantities);
+    #   - raw prior-mean methods must NOT standardize (mean on the y scale);
+    #   - standard-GP methods honor the config (default True).
+    if is_prior_mean:
+        standardize_output = standardize_prior_mean
+    else:
+        standardize_output = bool(model_cfg.get("standardize_output", True))
     gp_config = GPModelConfig(
         noise_std=noise_std if use_fixed_noise else None,
         normalize_input=bool(model_cfg.get("normalize_input", True)),
-        standardize_output=bool(model_cfg.get("standardize_output", False)),
+        standardize_output=standardize_output,
     )
-    is_prior_mean = spec["model_kind"] == "prior_mean_gp"
+
+    # Raw prior mean f_prior(x) = baseline + amplitude * pi(x) lives on the y
+    # scale; the standardized variant z-scores pi(x) instead and ignores
+    # (baseline, amplitude), so do not pull the oracle prior_mean_scale there.
+    if is_prior_mean and not standardize_prior_mean:
+        baseline, amplitude = problem.prior_mean_scale()
+    else:
+        baseline, amplitude = 0.0, 1.0
     return PriorGPModelBuilder(
         gp_config,
         bounds=problem.bounds,
         prior=prior if is_prior_mean else None,
         lambda_init=float(config.get("lambda_init", 1.0)),
         learn_lambda=bool(spec["learn_lambda"]) if is_prior_mean else True,
+        prior_baseline=baseline,
+        prior_amplitude=amplitude,
+        standardize_prior_mean=standardize_prior_mean,
     )
 
 
@@ -169,7 +237,7 @@ def _capture_snapshot(
 def _run_one_method(
     method_name: str,
     config: dict[str, Any],
-    problem: NormalizedBenchmark,
+    problem: OrientedBenchmark,
     prior: GaussianPrior,
     X_init: torch.Tensor,
     Y_obs_init: torch.Tensor,
@@ -259,7 +327,7 @@ def _run_one_method(
 
 def _run_one_seed(
     config: dict[str, Any],
-    problem: NormalizedBenchmark,
+    problem: OrientedBenchmark,
     prior: GaussianPrior,
     seed: int,
     log,
@@ -313,13 +381,16 @@ def _run_one_seed(
         noise_std=noise_std,
         dim=problem.dim,
         bounds=problem.bounds.tolist(),
-        normalization={
+        orientation={
             "f_min": problem.f_min,
             "f_max": problem.f_max,
             "direction": problem.direction,
+            "f_lower": problem.f_lower,
+            "f_upper": problem.f_upper,
+            "f_opt": problem.f_opt,
         },
         prior=prior_meta,
-        f_opt_normalized=float(problem.f_opt_normalized),
+        f_opt=float(problem.f_opt),
         alpha=float(config.get("alpha", 0.5)),
         beta=float(config["beta"]),
     )
@@ -375,7 +446,7 @@ def main(argv: Optional[list[str]] = None) -> Path:
     device_name = args.device if args.device is not None else config.get("device", "cpu")
     device = resolve_device(device_name)
 
-    problem = build_normalized_benchmark(config)
+    problem = build_oriented_benchmark(config)
     prior = GaussianPrior.from_config(config["prior"], dim=problem.dim)
 
     tag = args.tag or config.get("tag")
@@ -400,10 +471,14 @@ def main(argv: Optional[list[str]] = None) -> Path:
         "prior":          prior.to_dict(),
         "alpha":          float(config.get("alpha", 0.5)),
         "beta":           float(config["beta"]),
-        "normalization": {
+        "f_opt":          float(problem.f_opt),
+        "orientation": {
             "f_min": problem.f_min,
             "f_max": problem.f_max,
             "direction": problem.direction,
+            "f_lower": problem.f_lower,
+            "f_upper": problem.f_upper,
+            "f_opt": problem.f_opt,
         },
     })
 
@@ -414,7 +489,8 @@ def main(argv: Optional[list[str]] = None) -> Path:
     log.info(f"  bounds    = {problem.bounds.detach().cpu().tolist()}")
     log.info(f"  prior     = {prior}  (label={config.get('prior', {}).get('label')})")
     log.info(f"  alpha     = {config.get('alpha', 0.5)}  beta = {config['beta']}")
-    log.info(f"  noise_std = {problem.default_noise_std}  (normalized scale)")
+    log.info(f"  f_opt     = {problem.f_opt:.4f}  (oriented, raw scale; direction={problem.direction})")
+    log.info(f"  noise_std = {problem.default_noise_std}  (raw oriented scale)")
     log.info(f"  n_initial = {config['initial_design_size']}  budget = {config['budget']}")
     log.info(f"  methods   = {list(config['methods'])}")
     log.info(f"  seeds     = {list(config['seeds'])}")

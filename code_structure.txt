@@ -1,0 +1,1117 @@
+================================================================================
+Code Structure — Bayesian Optimization Separation of Concerns
+================================================================================
+
+Companion document to `documentation.txt`. Where `documentation.txt` describes
+the DATA pipeline (what each artifact contains and why), this file describes
+the CODE: how the source tree is organised, which dataclasses live where,
+which functions transform what, and how the modules call each other.
+
+The repository implements Experiment A (target matching) with two BO methods
+(RIGHT, WRONG) and a clean three-stage pipeline:
+
+  run.py (generate raw)  ─►  process.py (per-seed derive)  ─►  analyze.py (aggregate)
+
+
+================================================================================
+0. Repository layout
+================================================================================
+
+    bayesian-optimization-separation-concerns/
+    ├── common/                      Generic, reusable BO infrastructure.
+    │   ├── problems.py              ProblemSpec abstract base + Observation.
+    │   ├── models.py                GP construction, fitting, state-dict I/O.
+    │   ├── initial_design.py        Sobol initial design.
+    │   ├── acquisition_utils.py     Wrappers around optimize_acqf.
+    │   ├── metrics.py               Target-distance / regret / hitting-time.
+    │   ├── diagnostics.py           NLPD, coverage, PIT, residuals, near-target.
+    │   ├── statistics.py            Across-seed aggregation + pairwise tests.
+    │   ├── logging.py               Run directory layout + RunLogger class.
+    │   ├── serialization.py         Tensor/JSON/CSV/Pickle helpers.
+    │   └── __init__.py              Empty package marker.
+    │
+    ├── benchmarks/                  Synthetic analytic benchmarks.
+    │   ├── synthetic.py             SyntheticBenchmark abstract base.
+    │   ├── toy.py                   SineTrend1D, Forrester1D, Branin2D, Hartmann6D.
+    │   └── __init__.py              Exposes BENCHMARK_REGISTRY.
+    │
+    ├── acquisitions/                Task-specific acquisition formulas.
+    │   ├── target_matching.py       TargetMatchingUCB (RIGHT) +
+    │   │                            WrongTargetMatchingUCB (WRONG baseline).
+    │   └── __init__.py
+    │
+    ├── data/                        On-disk JSON schemas (dataclasses).
+    │   ├── raw.py                   RawSeedData, StepRecord, ModelSnapshot,
+    │   │                            InitialDesign, MethodTrajectory,
+    │   │                            SeedMetadata.
+    │   ├── processed.py             ProcessedSeedData, FinalScalars,
+    │   │                            ConvergenceCurves, CalibrationReport,
+    │   │                            CalibrationPredictionGrid, MethodProcessed.
+    │   └── __init__.py
+    │
+    ├── experiments/                 Experiment-specific entry points.
+    │   └── exp_a_target_matching/
+    │       ├── run.py               Generates raw seed JSON files.
+    │       ├── process.py           Builds processed/per_seed files.
+    │       ├── analyze.py           Builds processed/aggregate files.
+    │       ├── configs/
+    │       │   └── smoke_1d.yaml    Example config.
+    │       └── notebooks/
+    │
+    ├── scripts/
+    │   └── smoke_test_exp_a_workflow.py   Legacy end-to-end wrapper.
+    │
+    ├── results/                     One subtree per experiment / run.
+    ├── hpc/narval/                  SLURM scripts (HPC).
+    ├── CLAUDE.md, README.md, LICENSE, requirements.txt
+    └── documentation.txt            Companion: data pipeline description.
+
+The dependency direction is unidirectional:
+
+    benchmarks/ ─┐
+                 ├─► experiments/  uses everything below.
+    acquisitions/┘
+                 │
+    data/  ◄─────┤
+    common/ ◄────┘   common has no dependency on data/, benchmarks/, or acquisitions/.
+
+`data/` only depends on stdlib. `common/` depends on stdlib + torch + botorch +
+gpytorch + scipy (optional). `benchmarks/` depends on `common/problems.py`.
+`acquisitions/` depends on botorch. `experiments/` glues all four together.
+
+
+================================================================================
+1. common/  — shared infrastructure
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1.1 common/problems.py
+--------------------------------------------------------------------------------
+
+PURPOSE: defines the generic problem interface that the BO loop talks to. The
+loop knows nothing about whether the data comes from an analytic benchmark,
+a tabular dataset, or a real experiment — it only knows `problem.observe(X)`.
+
+MAIN DATACLASS
+  Observation
+      X            : torch.Tensor   shape (n, dim)
+      y_obs        : torch.Tensor   shape (n, 1)        — noisy, given to BO
+      f_noiseless  : Optional[Tensor] shape (n, 1)      — synthetic only
+      metadata     : Optional[dict]                     — auxiliary info
+
+      __post_init__ enforces shape consistency between X, y_obs, f_noiseless.
+
+MAIN ABSTRACT CLASS
+  ProblemSpec(ABC)
+      Constructor stores: name, dim, bounds (2, dim), problem_type,
+                          default_noise_std.
+
+      .observe(X, **kw) -> Observation       (public, calls prepare_X then
+                                              _observe_prepared)
+      ._observe_prepared(X, **kw)            (abstract, subclasses implement)
+      .prepare_X(X)                          (validate dim, promote 1-D to 2-D,
+                                              cast to double)
+      .has_noiseless() -> bool               (default False)
+      .oracle_target_distance(T) -> float|None  (default None; benchmarks
+                                                  override when analytical
+                                                  value is known)
+      .metadata() -> dict                    (serialisable description)
+
+UTILITY
+  ensure_2d_y(y) -> Tensor                   (turns (n,) into (n, 1); rejects
+                                              other shapes)
+
+
+--------------------------------------------------------------------------------
+1.2 common/models.py
+--------------------------------------------------------------------------------
+
+PURPOSE: generic GP construction and reconstruction. No experiment-specific
+logic — does not know about targets, transforms, or methods.
+
+MAIN DATACLASS
+  GPModelConfig
+      noise_std          : Optional[float]   None → SingleTaskGP (learned noise);
+                                              float → FixedNoiseGP.
+      normalize_input    : bool = True       wrap inputs in botorch Normalize.
+      standardize_output : bool = True       wrap outputs in botorch Standardize.
+      kernel             : str = "matern52"
+
+MAIN CLASS
+  GPModelBuilder(config: GPModelConfig | None)
+
+      .construct(train_X, train_Y) -> SingleTaskGP|FixedNoiseGP
+          Builds a fresh model WITHOUT MLL fitting.  Used by process.py before
+          load_state_dict_into to reconstruct a trained GP deterministically.
+
+      .fit(train_X, train_Y) -> SingleTaskGP|FixedNoiseGP
+          construct + ExactMarginalLogLikelihood + botorch.fit_gpytorch_model.
+          Used by run.py at every BO iteration.
+
+      .fit_model_list(train_Xs, train_Ys, noise_stds=None) -> ModelListGP
+          One independent GP per output; for future multi-objective work.
+
+      .predict(model, X) -> (mean, variance)
+          posterior pass through model.posterior; both outputs shape (n, 1).
+
+      .extract_hyperparameters(model) -> dict
+          Parsed scalars (lengthscale, outputscale, noise_variance_raw,
+          noise_variance_standardized, outcome_std) for logging/inspection.
+
+MODULE FUNCTIONS
+  validate_training_data(train_X, train_Y) -> (train_X, train_Y)
+      Casts to torch.double, normalises shapes, checks n consistency.
+
+  serialize_state_dict(model) -> dict[str, list|float]
+      JSON-safe round-trip of model.state_dict().  Scalars become floats,
+      tensors become nested lists.
+
+  load_state_dict_into(model, serial: dict) -> None
+      STRICT inverse of serialize_state_dict.  Errors on missing or extra keys.
+      Coerces stored values back to torch tensors of the same dtype/shape as
+      the freshly-constructed template model, then calls load_state_dict.
+
+INVARIANT: process.py rebuilds GPs by calling
+    builder.construct(X, Y) + load_state_dict_into(model, snapshot.state_dict)
+so the offline GP is bit-identical to the one used during BO.
+
+
+--------------------------------------------------------------------------------
+1.3 common/initial_design.py
+--------------------------------------------------------------------------------
+
+PURPOSE: deterministic quasi-random initial designs.
+
+MAIN FUNCTION
+  sobol_design(bounds, n, seed=0) -> Tensor of shape (n, dim)
+      Uses torch.quasirandom.SobolEngine with scramble=True.  The seed fully
+      determines the design.  Output is double-precision in the problem's
+      native bounds.
+
+Used once per (benchmark, seed) in run.py::_run_one_seed.
+
+
+--------------------------------------------------------------------------------
+1.4 common/acquisition_utils.py
+--------------------------------------------------------------------------------
+
+PURPOSE: thin wrappers around botorch's optimize_acqf, with sensible defaults
+and detached outputs.  No task-specific or experiment-specific logic.
+
+MODULE CONSTANTS
+  _DEFAULT_NUM_RESTARTS = 10
+  _DEFAULT_RAW_SAMPLES  = 256
+
+MAIN FUNCTIONS
+  optimize_acquisition(acq_fn, bounds, q=1, num_restarts, raw_samples,
+                       fixed_features=None, options=None) -> (cand, value)
+      Validates shapes, calls optimize_acqf, returns detached tensors.
+
+  suggest_next_point(acq_fn, bounds, num_restarts, raw_samples, options=None)
+                    -> (x_next: shape (1, d), acq_value)
+      Convenience wrapper that fixes q=1.
+
+  clamp_variance(variance, min_variance=1e-6) -> Tensor
+      Floor for posterior variance to avoid sqrt of negatives caused by
+      Cholesky cancellation.
+
+NOTE: run.py calls botorch.optimize_acqf directly with its own restart/raw
+parameters; suggest_next_point is provided for general use but currently
+unused by exp_a.
+
+
+--------------------------------------------------------------------------------
+1.5 common/metrics.py
+--------------------------------------------------------------------------------
+
+PURPOSE: pure, stateless metric functions on noiseless trajectories.  No GP
+fitting, no I/O.
+
+INPUT CONVENTIONS
+  - 1-D float trajectory of shape (N,) where N = initial_design_size + budget.
+  - Use f_noiseless for synthetic problems; for real-data the caller decides.
+  - Minimisation: smaller is better.  Target-matching is sign-agnostic via |·|.
+
+PER-STEP / PER-TRAJECTORY METRICS
+  instantaneous_regret(f_values, f_opt)             — f − f*.
+  simple_regret(f_values, f_opt)                    — min_t f − f*.
+  running_simple_regret(f_values, f_opt)            — cummin(f) − f*.
+  cumulative_regret(f_values, f_opt)                — cumsum of instantaneous.
+  average_cumulative_regret(f_values, f_opt)        — running mean.
+  best_so_far(values, minimize=True)                — running min/max.
+
+TARGET-MATCHING METRICS
+  target_distance(f_values, T)                      — |f − T|.
+  target_best_so_far(f_values, T)                   — cummin(|f − T|).
+  target_simple_regret(f_values, T, best_achievable=0)
+                                                    — min |f−T| − oracle.
+  running_target_simple_regret(f_values, T, best_achievable=0)
+                                                    — cummin curve − oracle.
+  target_cumulative_regret(f_values, T, best_achievable=0, cumulative_best=False)
+        if cumulative_best=False : Σ (|f−T| − oracle)
+        if cumulative_best=True  : Σ (running_best − oracle)
+  target_average_cumulative_regret(f_values, T, best_achievable=0)
+                                                    — C_t^target / t.
+
+HITTING TIME
+  hitting_time(distances, tolerance, not_hit_value=None) -> int
+      First 1-based index where distance ≤ tolerance; len(d)+1 if never.
+
+PER-TRAJECTORY SUMMARY
+  final_run_summary(f_values, target, oracle_best=0.0,
+                    epsilon=None, failure_threshold=None) -> dict
+      Returns:
+        final_best_target_distance
+        final_target_simple_regret
+        cumulative_instantaneous_target_regret
+        cumulative_best_so_far_target_regret
+        worst_instantaneous_target_distance
+        mean_instantaneous_target_distance
+        median_instantaneous_target_distance
+        hitting_time              (only if epsilon is not None)
+        failure_indicator         (only if failure_threshold is not None)
+      Used by process._final_scalars to populate FinalScalars.
+
+OTHER
+  area_under_curve(values) -> float                 — trapezoidal AUC.
+  time_to_fraction_of_range(f, T, f_range, fraction=0.05) -> int
+                                                    — normalised hitting-time.
+  high_quantile(metric_values, q)                   — q-th quantile across runs.
+  hypervolume_indicator(Y, ref)                     — multi-objective stub.
+  per_objective_best(Y)                             — column-wise max.
+
+
+--------------------------------------------------------------------------------
+1.6 common/diagnostics.py
+--------------------------------------------------------------------------------
+
+PURPOSE: pure calibration / model-quality diagnostics on GP predictions vs.
+held-out ground truth.
+
+CORE FUNCTIONS (all take y_true, mean, and either std or var)
+  gaussian_nlpd(...)                       — mean −log N(y | μ, σ²).
+  standardized_residuals(...)              — z = (y − μ)/σ.
+  empirical_coverage(..., level=0.95)      — fraction of y inside Gaussian CI.
+  pit_values(...)                          — Φ(z) per point.
+  confidence_bound_violation_rate(..., beta=2.0) — fraction of |y−μ|>√β·σ.
+
+AGGREGATE SUMMARIES
+  calibration_summary(y_true, mean, std|var, level=0.95, beta=2.0) -> dict
+      {nlpd, coverage, mean_standardized_residual,
+       std_standardized_residual, mean_abs_standardized_residual,
+       pit_mean, pit_std, confidence_violation_rate}
+
+  near_target_mask(f_true, T, epsilon) -> bool array
+  near_target_calibration_summary(f_true, mean, std|var, target, epsilon,
+                                  level=0.95, beta=2.0) -> dict
+      Restricts calibration_summary to {i : |f_true_i − T| ≤ epsilon}.
+      Always defined against raw f, regardless of what the GP modelled.
+      Adds near_target_count and near_target_fraction.
+
+OPTIONAL (require scipy; fall back to NaN if absent)
+  ks_test_standard_normal(z) -> dict
+  ks_test_uniform(u) -> dict
+
+INTERNAL HELPERS
+  _resolve_std(std, var, eps)         — accept either, clamp positive.
+  _normal_cdf, _normal_quantile       — scipy-free fallbacks.
+
+
+--------------------------------------------------------------------------------
+1.7 common/statistics.py
+--------------------------------------------------------------------------------
+
+PURPOSE: pure, stateless across-seed aggregation and pairwise comparison
+utilities.  Accepts torch / numpy / Python lists; converts internally to
+numpy arrays.
+
+SIGN CONVENTION: smaller = better.
+  - mann_whitney_comparison(R, W, "less")  tests R < W stochastically.
+  - rank_biserial_correlation              positive ⇒ R better.
+  - cohens_d_right_better                  positive ⇒ R better.
+
+DESCRIPTIVE
+  summarize_sample(values) -> dict
+      {n, mean, std, stderr, median, q25, q75, min, max, q90, q95}.
+      std/stderr are NaN for n=1.
+
+  failure_rate(values, threshold) -> float
+      Mean of (values > threshold).
+
+PAIRWISE COMPARISONS
+  mann_whitney_comparison(R, W, alternative="less") -> dict
+      {statistic, p_value, alternative, n_right, n_wrong, scipy_available}.
+      Returns NaN when scipy is missing.
+
+  rank_biserial_correlation(R, W) -> float
+      Vectorised n_R × n_W comparison: (wins − losses) / n_pairs.
+
+  cohens_d_right_better(R, W) -> float
+      (mean_W − mean_R) / pooled_std.  NaN when n<2 or std≈0.
+
+BOOTSTRAP CIs (CURVES)
+  bootstrap_ci_curves(curves: (n_runs, n_steps), statistic="median",
+                      confidence=0.95, n_bootstrap=10_000,
+                      random_state=None) -> {center, lower, upper}
+      Resamples ROWS (runs) with replacement, recomputes column-wise statistic,
+      reports percentile CI per column.  Returns numpy arrays.
+
+  aggregate_convergence_curves({method: curves}, statistic, confidence,
+                                n_bootstrap) -> dict[method] = {c,l,u}
+      Convenience wrapper applying bootstrap_ci_curves to each method.
+
+  compare_final_performance(R, W, failure_threshold=None) -> dict
+      Convenience wrapper combining summarize_sample of both samples,
+      Mann-Whitney, rank-biserial, Cohen's d, and (optionally) failure rates.
+      Currently NOT used by analyze.py — it builds equivalent fields manually
+      via the individual helpers.  Available for ad-hoc analysis.
+
+INTERNAL HELPERS
+  _to_numpy_1d / _to_numpy_2d         — normalise inputs to numpy arrays.
+
+
+--------------------------------------------------------------------------------
+1.8 common/logging.py
+--------------------------------------------------------------------------------
+
+PURPOSE: own the run-directory lifecycle and result file paths.  No data
+transformations, no metrics.
+
+MAIN CLASS
+  RunLogger(run_dir: Path)
+
+      @classmethod create(experiment, tag, results_root="results",
+                          run_id=None) -> RunLogger
+          Creates results_root/<experiment>/runs/<run_id>/{raw, processed,
+          figures, logs}.  run_id defaults to make_run_id(tag).
+
+      .save_config(config: dict)        -> Path  (writes config.json)
+      .load_config()                    -> dict
+      .save_metadata(extra=None,
+                     repo_root=None)    -> Path  (writes metadata.json with
+                                                   git commit, dirty flag,
+                                                   sys.argv, Python version,
+                                                   platform, UTC timestamp)
+      .load_metadata()                  -> dict
+
+      .seed_result_path(benchmark, seed) -> Path
+          raw/<benchmark>/seed_<NNN>.json (creates parent).
+      .save_seed_result(benchmark, seed, result: dict) -> Path
+      .load_seed_result(benchmark, seed) -> dict
+      .iter_seed_results(benchmark)     -> list[dict]   (sorted)
+
+      .processed_per_seed_path(benchmark, seed) -> Path
+          processed/per_seed/<benchmark>/seed_<NNN>_processed.json
+      .processed_aggregate_path(benchmark, filename) -> Path
+          processed/aggregate/<benchmark>/<filename>
+
+      .save_processed(filename, data, fieldnames=None) -> Path
+          Dispatches on extension: .json → save_json; .csv → save_csv.
+      .load_processed(filename) -> dict|list
+
+      .get_log_path() -> Path           (logs/run.log)
+      .setup_file_logger(name, level=INFO) -> logging.Logger
+          File + stdout handlers; idempotent (won't double-attach).
+
+      .run_id() -> str                  (basename of run_dir)
+
+MODULE FUNCTIONS
+  make_run_id(tag) -> str
+      "YYYY-MM-DD_HH-MM-SS_<tag>" using UTC.
+
+INTERNAL
+  _git_commit_hash, _git_is_dirty       — subprocess-based git helpers.
+
+
+--------------------------------------------------------------------------------
+1.9 common/serialization.py
+--------------------------------------------------------------------------------
+
+PURPOSE: pure format conversion; no run-directory awareness.
+
+TENSOR HELPERS
+  tensor_to_list(t)        -> float for 0-D, nested list otherwise.
+  maybe_tensor_to_list(v)  -> pass-through for non-tensors.
+  tensors_to_lists(d)      -> recursive convert tensors to lists in nested
+                              dicts/lists.
+
+JSON
+  save_json(data, path, indent=2)
+  load_json(path) -> Any
+
+CSV
+  save_csv(rows: list[dict], path, fieldnames=None)
+  load_csv(path) -> list[dict[str, str]]   (strings only, caller casts)
+
+PICKLE
+  save_pickle(obj, path)
+  load_pickle(path) -> Any
+
+
+================================================================================
+2. benchmarks/  — synthetic analytic problems
+================================================================================
+
+
+--------------------------------------------------------------------------------
+2.1 benchmarks/synthetic.py
+--------------------------------------------------------------------------------
+
+PURPOSE: abstract base class for synthetic benchmarks, sitting between
+ProblemSpec and the concrete toy functions.
+
+MAIN ABSTRACT CLASS
+  SyntheticBenchmark(ProblemSpec)
+      __init__(name, dim, bounds, default_noise_std=0.0)
+          sets problem_type="synthetic" implicitly.
+
+      .f(X: Tensor (n, dim)) -> Tensor (n, 1)        ABSTRACT (noiseless).
+      .has_noiseless() -> True                       (override).
+
+      ._observe_prepared(X, noise_std=None) -> Observation
+          y_obs = f(X) + N(0, σ²)·I; f_noiseless = f(X).
+          σ defaults to self.default_noise_std.
+
+      .test_set(n, seed=0) -> Tensor (n, dim)
+          Deterministic scrambled Sobol grid in the problem's bounds.
+          Used by process.py for held-out calibration.
+
+
+--------------------------------------------------------------------------------
+2.2 benchmarks/toy.py — concrete benchmarks
+--------------------------------------------------------------------------------
+
+Each class inherits SyntheticBenchmark, sets bounds and a default noise level,
+and implements f.  Module-level constants hold default noise standard deviations.
+
+  SineTrend1D    f(x)  = sin(6x) + 0.3 x,   x ∈ [0, 1]
+                 dim=1, range ≈ [−0.766, 1.080].
+                 .oracle_target_distance(T) implemented exactly using
+                 module-level _SINE_TREND1D_F_MIN, _MAX (numerical extrema on
+                 a 200_001-point grid).
+
+  Forrester1D    f(x)  = (6x − 2)² sin(12x − 4),    x ∈ [0, 1]
+                 dim=1, range ≈ [−6.02, 15.8].
+                 No oracle_target_distance override.
+
+  Branin2D       2-D Branin–Hoo. bounds=[[-5,0],[10,15]].
+                 No oracle_target_distance override.
+
+  Hartmann6D     6-D Hartmann. bounds=[0,1]^6.
+                 Pre-allocated module-level constants
+                 _H6_ALPHA, _H6_A, _H6_P. Moves them to X.device on each call.
+
+MODULE-LEVEL CONSTANTS
+  DEFAULT_NOISE_STD_SINE_TREND1D = 0.05
+  DEFAULT_NOISE_STD_FORRESTER1D  = 0.5
+  DEFAULT_NOISE_STD_BRANIN       = 2.0
+  DEFAULT_NOISE_STD_HARTMANN6    = 0.05
+
+
+--------------------------------------------------------------------------------
+2.3 benchmarks/__init__.py
+--------------------------------------------------------------------------------
+
+Re-exports the four benchmark classes and their default-noise constants, plus
+the LOOK-UP TABLE used by run.py and process.py to instantiate benchmarks
+from a string name:
+
+  BENCHMARK_REGISTRY: dict[str, type[SyntheticBenchmark]] = {
+      "sine_trend_1d": SineTrend1D,
+      "forrester_1d":  Forrester1D,
+      "branin_2d":     Branin2D,
+      "hartmann_6d":   Hartmann6D,
+  }
+
+
+================================================================================
+3. acquisitions/  — task-specific acquisitions
+================================================================================
+
+
+--------------------------------------------------------------------------------
+3.1 acquisitions/target_matching.py
+--------------------------------------------------------------------------------
+
+PURPOSE: implement the two acquisitions compared in Experiment A.
+
+  TargetMatchingUCB(AnalyticAcquisitionFunction)           [RIGHT]
+      Trained on raw y_obs ≈ f.  Acquisition value (maximised):
+          α(x) = − |μ_f(x) − T| + √β · σ_f(x).
+      __init__(model, target: float|Tensor, beta=2.0)
+          Registers target as a tensor buffer (so it moves with the module).
+          Rejects beta < 0.
+      .forward(X: (..., q=1, d)) -> (...,)
+          Computes mean and clamped variance; returns value.squeeze(-1, -1).
+          Raises if q ≠ 1.
+
+  WrongTargetMatchingUCB(AnalyticAcquisitionFunction)      [WRONG baseline]
+      Trained on g(x) = |y_obs − T|.  Acquisition value (maximised):
+          α(x) = − μ_g(x) + √β · σ_g(x)         (negated LCB).
+      __init__(model, beta=2.0)
+          T is NOT passed: it is baked into the training data.
+      .forward(X) -> (...,)
+          Identical shape semantics; q=1 only.
+
+MODULE CONSTANT
+  _MIN_VARIANCE = 1e-10 (used to clamp posterior variance before sqrt).
+
+
+================================================================================
+4. data/  — on-disk JSON schemas
+================================================================================
+
+PURPOSE: declare the EXACT shape of every JSON file produced by run.py and
+process.py.  Pure dataclasses + to_dict / from_dict; no business logic.
+
+--------------------------------------------------------------------------------
+4.1 data/raw.py — written by run.py
+--------------------------------------------------------------------------------
+
+  StepRecord                       (one BO iteration)
+      iteration                 : int            1-based, excludes init design
+      x                         : list[float]
+      y_obs                     : float
+      f_noiseless               : Optional[float]
+      acq_value                 : float
+      train_size                : int            n_init + iteration − 1
+      posterior_mean_at_candidate : float
+      posterior_std_at_candidate  : float
+
+      .from_tensors(...)        constructor from raw tensors.
+      .to_dict() / .from_dict() round-trip.
+
+  ModelSnapshot                    (one fitted GP per iteration)
+      iteration                 : int
+      model_type                : str            "SingleTaskGP" or "FixedNoiseGP"
+      kernel_name               : str            "matern52"
+      noise_std                 : Optional[float]  used to rebuild train_Yvar
+      state_dict                : dict           JSON-serialised GP state
+      hyperparameters           : dict           diagnostic only
+
+  InitialDesign                    (shared across methods of one seed)
+      X                         : list[list[float]]
+      y_obs                     : list[float]
+      f_noiseless               : Optional[list[float]]
+
+  MethodTrajectory                 (per method, per seed)
+      method_name               : str            JSON key
+      train_label               : str            "y_obs" | "abs(y_obs - target)"
+      trajectory                : list[StepRecord]
+      model_snapshots           : list[ModelSnapshot]
+
+  SeedMetadata                     (per seed)
+      experiment, problem_type, benchmark, seed, budget,
+      initial_design_size, target, noise_std, dim, bounds.
+
+  RawSeedData                      (top-level)
+      metadata        : SeedMetadata
+      initial_design  : InitialDesign
+      methods         : dict[str, MethodTrajectory]
+
+      .to_dict() / .from_dict()    round-trip for JSON I/O.
+
+Invariants enforced by the schema:
+  - train_X / train_Y are NEVER stored.
+  - train_label is propagated so process.py can reconstruct train_Y from
+    raw y_obs without inspecting BO method names.
+
+--------------------------------------------------------------------------------
+4.2 data/processed.py — written by process.py
+--------------------------------------------------------------------------------
+
+  FinalScalars                     (per method, per seed)
+      n_evaluations               : int            n_init + budget
+      final_best_target_distance  : float
+      final_target_simple_regret  : float          (above − oracle_best)
+      mean_inst_target_distance   : float
+      median_inst_target_distance : float
+      worst_inst_target_distance  : float
+      cumulative_inst_target_regret : float
+      cumulative_bsf_target_regret  : float
+      auc_running_target_regret   : float
+      hitting_time                : Optional[int]
+      failure_indicator           : Optional[int]
+      best_x                      : list[float]
+
+  ConvergenceCurves                (per method, per seed; length n_evaluations)
+      iteration                       : list[int]
+      instantaneous_target_distance   : list[float]
+      running_best_target_distance    : list[float]
+      cumulative_inst_target_regret   : list[float]
+      cumulative_bsf_target_regret    : list[float]
+
+  CalibrationPredictionGrid        (per-point predictions for one snapshot)
+      X_test            : list[list[float]]
+      y_true            : list[float]                # f or |f−T| per method
+      posterior_mean    : list[float]
+      posterior_std     : list[float]
+
+  CalibrationReport                (per checkpoint)
+      iteration_index   : int
+      n_test            : int
+      test_grid_seed    : int
+      test_grid         : dict[str, float]            # calibration_summary
+      near_target       : Optional[dict[str, Any]]    # near_target_summary
+      predictions       : Optional[CalibrationPredictionGrid]
+
+  MethodProcessed                  (one method under one seed)
+      method_name       : str
+      train_label       : str
+      final             : FinalScalars
+      convergence       : ConvergenceCurves
+      calibrations      : list[CalibrationReport]    # multiple checkpoints
+
+  ProcessedSeedData                (top-level processed JSON)
+      metadata          : dict       # copy of SeedMetadata
+      target            : float
+      epsilon           : Optional[float]
+      failure_threshold : Optional[float]
+      oracle_best       : float
+      test_grid         : dict[str, int]            # {"n_test", "seed"}
+      methods           : dict[str, MethodProcessed]
+
+
+================================================================================
+5. experiments/exp_a_target_matching/  — entry points
+================================================================================
+
+
+--------------------------------------------------------------------------------
+5.1 run.py — generates raw seed JSON files
+--------------------------------------------------------------------------------
+
+ENTRY POINT
+  main(argv=None) -> Path                 # run_dir
+  CLI: python -m experiments.exp_a_target_matching.run --config <YAML>
+                                          [--tag] [--results-root] [--device]
+
+INTERNAL METHOD REGISTRY (the only place RIGHT/WRONG differ)
+  _METHOD_SPECS = {
+      "right_target_matching_ucb": {
+          train_label="y_obs",
+          transform=_identity_y,         # y_raw → y_raw
+          acq_builder=_build_right_acq,  # TargetMatchingUCB(model, T, beta)
+          use_fixed_noise=True,          # FixedNoiseGP with known σ
+      },
+      "wrong_gp_on_abs_lcb": {
+          train_label="abs(y_obs - target)",
+          transform=_abs_minus_target,   # y_raw → |y_raw − T|
+          acq_builder=_build_wrong_acq,  # WrongTargetMatchingUCB(model, beta)
+          use_fixed_noise=False,         # SingleTaskGP (noise inferred)
+      },
+  }
+
+CORE FUNCTIONS
+
+  _capture_snapshot(builder, model, iteration) -> ModelSnapshot
+      Combines kernel name, noise_std, serialize_state_dict(model), and
+      builder.extract_hyperparameters into a ModelSnapshot.
+
+  _run_one_method(method_name, config, problem, X_init, Y_obs_init, log, device)
+                  -> MethodTrajectory
+      The inner BO loop.  For iter = 1..budget:
+        1. Y_train = spec["transform"](Y_raw, target)
+        2. model = builder.fit(X, Y_train)
+        3. snapshots.append(_capture_snapshot(builder, model, iter))
+        4. acq = spec["acq_builder"](model, target, beta)
+        5. cand, acq_val = botorch.optimize_acqf(acq, bounds, q=1,
+                                                 num_restarts, raw_samples)
+        6. mean, var = builder.predict(model, cand)
+        7. obs = problem.observe(cand)         # NEVER on Y_train
+        8. trajectory.append(StepRecord.from_tensors(...))
+        9. X ← cat(X, cand); Y_raw ← cat(Y_raw, obs.y_obs)
+      Returns MethodTrajectory(method_name, train_label, trajectory, snapshots).
+
+  _run_one_seed(config, problem, seed, log, device) -> RawSeedData
+      torch.manual_seed(seed); builds X_init = sobol_design(...); calls
+      problem.observe(X_init) ONCE; loops over methods passing the SHARED
+      initial design.  Constructs SeedMetadata and RawSeedData.
+
+UTILITIES
+  _load_config(path)      yaml.safe_load.
+  _parse_args(argv)       argparse: --config required.
+  resolve_device(name)    "auto" → cuda if available else cpu.
+
+ENTRY-POINT GLUE (main)
+  - Parse args, load YAML, resolve device.
+  - Look up benchmark_name in BENCHMARK_REGISTRY → instantiate problem.
+  - Resolve tag (--tag > config["tag"]).
+  - Build RunLogger.create + setup_file_logger.
+  - save_config(config); save_metadata(extra={...key fields}).
+  - For each seed: raw = _run_one_seed(...); logger.save_seed_result(...).
+  - Log elapsed time.
+
+
+--------------------------------------------------------------------------------
+5.2 process.py — builds processed/per_seed files
+--------------------------------------------------------------------------------
+
+ENTRY POINT
+  main(argv=None)
+  CLI: python -m experiments.exp_a_target_matching.process
+       --run-dir <run_dir>  [--benchmark ...]  [--seed ...]  [--device cpu|cuda]
+
+NOTE on a small bug surface: main() reads
+    device_name = args.device or config.get("device", "cpu")
+BEFORE `config` is defined.  This works only when --device is provided
+explicitly (the smoke runs do).  Watch for this if calling without --device.
+
+CORE FUNCTIONS
+
+  _reconstruct_X_Y(initial_design, trajectory_prefix, train_label, target,
+                   device) -> (train_X, train_Y)
+      Rebuilds the training inputs/targets seen at the start of one iteration.
+      For each method, applies train_label transform to the rebuilt y_obs.
+
+  _rebuild_gp_at_snapshot(snapshot, train_X, train_Y) -> GP
+      Construct fresh GP via GPModelBuilder(GPModelConfig(noise_std=...)),
+      then load_state_dict_into.  No MLL fitting.
+
+  _full_f_history(initial_design, trajectory) -> Tensor (N,)
+      Concatenates noiseless f over init design + BO trajectory.  Raises if
+      f_noiseless is missing — process.py currently requires synthetic data.
+
+  _full_x_history(initial_design, trajectory) -> Tensor (N, dim)
+      Same for the query points.
+
+  _final_scalars(f_history, X_history, target, oracle_best,
+                 epsilon, failure_threshold) -> FinalScalars
+      Wraps common.metrics.final_run_summary + auc_running_target_regret
+      + argmin to compute best_x.
+
+  _convergence_curves(f_history, target, oracle_best) -> ConvergenceCurves
+      Computes the four time series of length n_evaluations.
+
+  _y_true_for_method(train_label, f_test, target) -> Tensor
+      f_test for RIGHT; |f_test − target| for WRONG.
+
+  _calibration_reports(method, initial_design, problem, X_test, f_test,
+                       target, test_grid_seed, near_target_epsilon, device,
+                       every=5) -> list[CalibrationReport]
+      Walks ModelSnapshots; for snapshots with iteration % every == 0 or the
+      last snapshot:
+        rebuild GP, posterior on X_test, compute calibration_summary,
+        optionally near_target_calibration_summary, save
+        CalibrationPredictionGrid.
+
+  _process_one_seed(raw: RawSeedData, config, device) -> ProcessedSeedData
+      Instantiate benchmark from BENCHMARK_REGISTRY using raw.metadata.benchmark
+      and raw.metadata.noise_std.  Build X_test, f_test, oracle_best.
+      For each method: build f_history, X_history, FinalScalars,
+      ConvergenceCurves, list[CalibrationReport].  Assemble MethodProcessed
+      and ProcessedSeedData.
+
+  _discover_seed_files(run_dir, benchmarks, seeds) -> list[(bench, seed, path)]
+      Scans raw/<bench>/seed_*.json applying optional filters.
+
+ENTRY-POINT GLUE
+  Loads config.json, walks discovered seed files, processes each one in
+  isolation, writes processed/per_seed/<benchmark>/seed_<NNN>_processed.json
+  via RunLogger.processed_per_seed_path.
+
+
+--------------------------------------------------------------------------------
+5.3 analyze.py — builds processed/aggregate files
+--------------------------------------------------------------------------------
+
+ENTRY POINT
+  main(argv=None)
+  CLI: python -m experiments.exp_a_target_matching.analyze
+       --run-dir <run_dir>  [--benchmark ...]
+       [--statistic mean|median]  [--confidence FLOAT]
+       [--n-bootstrap INT]
+
+MODULE-LEVEL CONFIGURATION
+  _FINAL_SCALAR_KEYS         scalars summarised + tested.
+      final_best_target_distance, final_target_simple_regret,
+      mean_inst_target_distance, worst_inst_target_distance,
+      cumulative_inst_target_regret, cumulative_bsf_target_regret,
+      auc_running_target_regret, hitting_time.
+
+  _CALIB_TEST_GRID_KEYS      calibration scalars on the full grid.
+      nlpd, coverage, mean_standardized_residual, std_standardized_residual,
+      mean_abs_standardized_residual, pit_mean, pit_std,
+      confidence_violation_rate.
+  _CALIB_NEAR_TARGET_KEYS    above + near_target_count, near_target_fraction.
+
+CORE FUNCTIONS
+
+  _stack_scalars(seeds, method, key) -> list[float]
+      Per-seed values of one FinalScalars field; drops None.
+
+  _stack_calibration(seeds, method, bucket, key) -> list[float]
+      Per-seed values from calibrations[-1].<bucket>[<key>]; drops None/NaN.
+      bucket ∈ {"test_grid", "near_target"}.
+
+  _stack_curves(seeds, method, key) -> np.ndarray (n_seeds, n_steps)
+
+  _maybe_summary(values) -> dict | None
+      Wraps summarize_sample with empty-list short-circuit.
+
+  _pairs_from_methods(methods) -> list[(right, wrong)]
+      All RIGHT × WRONG combinations (by `right_*` / `wrong_*` prefix).
+
+AGGREGATE FILE BUILDERS (each returns a JSON-ready dict)
+
+  _build_final_performance(seeds, methods) -> dict
+      For each method, for each scalar in _FINAL_SCALAR_KEYS, call
+      summarize_sample on the stack; also failure_rate when
+      failure_indicator is recorded.
+
+  _build_convergence_curves(seeds, methods,
+                            statistic="median", confidence=0.95,
+                            n_bootstrap=5000) -> dict
+      For each method, for each of the four curves, call
+      aggregate_convergence_curves and write {center, lower, upper}.
+
+  _build_calibration_summary(seeds, methods) -> dict
+      summarize_sample on each scalar of calibrations[-1] (FINAL checkpoint
+      only).  Both test_grid and near_target buckets.
+
+  _build_statistical_tests(seeds, methods, failure_threshold) -> dict
+      For each RIGHT×WRONG pair, for each scalar in _FINAL_SCALAR_KEYS,
+      build {n_right, n_wrong, mann_whitney, rank_biserial,
+      cohens_d_right_better, [right_failure_rate, wrong_failure_rate]}.
+
+ORCHESTRATION
+  _discover_processed(run_dir) -> dict[benchmark, list[Path]]
+      Scans processed/per_seed/<benchmark>/seed_*_processed.json.
+
+  main: load config.json (for failure_threshold), discover processed files,
+  for each benchmark load all per-seed JSONs into ProcessedSeedData objects,
+  then write four aggregate JSONs to processed/aggregate/<benchmark>/.
+
+
+--------------------------------------------------------------------------------
+5.4 configs/smoke_1d.yaml
+--------------------------------------------------------------------------------
+
+A complete example of every field consumed by run + process + analyze:
+
+  experiment, tag, benchmark, seeds (list), target, beta, initial_design_size,
+  budget, noise_std, num_restarts, raw_samples, device, methods (list),
+  epsilon, failure_threshold, test_grid {n_test, seed}, near_target_epsilon.
+
+(NOTE: smoke_1d.yaml currently has `benchmark: branin_2d` despite the file
+name; the smoke runs in results/ also show this.)
+
+
+================================================================================
+6. End-to-end call graph
+================================================================================
+
+The arrows below show "calls" (top-to-bottom = function call direction).
+
+  ┌────────────── run.py.main ──────────────┐
+  │ 1. argparse + yaml.safe_load             │
+  │ 2. BENCHMARK_REGISTRY[name](noise_std)   ───► benchmarks/__init__.py
+  │ 3. RunLogger.create + setup_file_logger  ───► common/logging.py
+  │ 4. logger.save_config / save_metadata    ───► common/serialization.py
+  │ 5. FOR seed in seeds:                                            │
+  │       _run_one_seed                                              │
+  │         torch.manual_seed                                        │
+  │         sobol_design                  ───► common/initial_design │
+  │         problem.observe(X_init)       ───► benchmarks/synthetic  │
+  │         FOR method in methods:                                   │
+  │             _run_one_method                                      │
+  │                FOR iter = 1..budget:                             │
+  │                   transform(Y_raw, T)                            │
+  │                   GPModelBuilder.fit  ───► common/models         │
+  │                   _capture_snapshot                              │
+  │                     serialize_state_dict                         │
+  │                     extract_hyperparameters                      │
+  │                   _METHOD_SPECS[m].acq_builder                   │
+  │                                       ───► acquisitions/target_… │
+  │                   botorch.optimize_acqf                          │
+  │                   builder.predict                                │
+  │                   problem.observe(cand)                          │
+  │                   StepRecord.from_tensors                        │
+  │         logger.save_seed_result       ───► common/logging        │
+  └──────────────────────────────────────────────────────────────────┘
+                              writes
+                              ▼
+              raw/<benchmark>/seed_NNN.json
+
+  ┌────────────── process.py.main ──────────┐
+  │ 1. load_json(config.json)                │
+  │ 2. _discover_seed_files                  │
+  │ 3. FOR (bench, seed, path) discovered:                           │
+  │       raw = RawSeedData.from_dict(load_json(path))  ◄── data/raw │
+  │       _process_one_seed                                          │
+  │          BENCHMARK_REGISTRY[name](noise_std)                     │
+  │          benchmark.test_set(n_test, seed=test_grid_seed)         │
+  │          benchmark.f(X_test)                                     │
+  │          problem.oracle_target_distance(T)                       │
+  │          FOR method in raw.methods:                              │
+  │             _full_f_history / _full_x_history                    │
+  │             _final_scalars                                       │
+  │                final_run_summary       ───► common/metrics       │
+  │                target_distance, target_best_so_far, area_under_curve
+  │             _convergence_curves                                  │
+  │                target_distance, target_best_so_far,              │
+  │                target_cumulative_regret (both modes)             │
+  │             _calibration_reports                                 │
+  │                FOR each retained snapshot:                       │
+  │                   _reconstruct_X_Y                               │
+  │                   _rebuild_gp_at_snapshot                        │
+  │                      GPModelBuilder.construct                    │
+  │                      load_state_dict_into  ───► common/models    │
+  │                   model.posterior(X_test)                        │
+  │                   calibration_summary       ───► common/diag.   │
+  │                   near_target_calibration_summary                │
+  │                   CalibrationPredictionGrid                      │
+  │          ProcessedSeedData(...)             ◄── data/processed   │
+  │       save_json(processed_per_seed_path)                         │
+  └──────────────────────────────────────────────────────────────────┘
+                              writes
+                              ▼
+        processed/per_seed/<benchmark>/seed_NNN_processed.json
+
+  ┌────────────── analyze.py.main ──────────┐
+  │ 1. _discover_processed                   │
+  │ 2. FOR benchmark in discovered:                                  │
+  │       seeds = [ProcessedSeedData.from_dict(load_json(p))         │
+  │                for p in paths]                                   │
+  │       _build_final_performance                                   │
+  │          summarize_sample, failure_rate   ───► common/statistics │
+  │       _build_convergence_curves                                  │
+  │          aggregate_convergence_curves                            │
+  │              bootstrap_ci_curves                                 │
+  │       _build_calibration_summary                                 │
+  │          summarize_sample                                        │
+  │       _build_statistical_tests                                   │
+  │          mann_whitney_comparison                                 │
+  │          rank_biserial_correlation                               │
+  │          cohens_d_right_better                                   │
+  │          failure_rate                                            │
+  │       save_json(processed_aggregate_path)                        │
+  └──────────────────────────────────────────────────────────────────┘
+                              writes
+                              ▼
+   processed/aggregate/<benchmark>/{final_performance, convergence_curves,
+                                    calibration_summary, statistical_tests}.json
+
+
+================================================================================
+7. Key invariants and contracts
+================================================================================
+
+The codebase enforces a small number of contracts that, together, give the
+pipeline its scientific validity.  Each is associated with the code that
+enforces it.
+
+  CONTRACT 1 — BO trains on y_obs (or its method-defined transform), never on
+               f_noiseless.
+      Enforced informally by:
+        - run.py::_run_one_method uses obs.y_obs to update Y_raw;
+          Y_train = transform(Y_raw, T); the model never sees obs.f_noiseless.
+        - common.models.GPModelBuilder docstring explicitly forbids this.
+
+  CONTRACT 2 — RIGHT and WRONG share the same initial design within a seed.
+      Enforced by:
+        - run.py::_run_one_seed builds X_init = sobol_design(seed) ONCE and
+          passes it to every method.
+        - data.raw.RawSeedData stores InitialDesign at the seed level, not
+          inside each MethodTrajectory.
+
+  CONTRACT 3 — Calibration reconstructs the trained GP exactly, no refitting.
+      Enforced by:
+        - process.py::_rebuild_gp_at_snapshot uses
+          GPModelBuilder.construct (NO MLL fit) + load_state_dict_into.
+        - common.models.load_state_dict_into is STRICT (raises on key
+          mismatch).
+
+  CONTRACT 4 — Raw files contain trajectory facts only; processed files are
+               deterministic functions of (raw, config).
+      Enforced by:
+        - data/raw.py schema has no aggregated fields.
+        - process.py reads at most ONE seed file at a time.
+        - analyze.py reads only processed/per_seed/, never raw/.
+
+  CONTRACT 5 — Held-out test grid is deterministic in (benchmark, n_test,
+               test_grid_seed) and SHARED across BO seeds and methods.
+      Enforced by:
+        - benchmarks/synthetic.SyntheticBenchmark.test_set is a pure function
+          of (n, seed) once the benchmark is fixed.
+        - process.py::_process_one_seed reads test_grid_seed from config.json,
+          not from the seed metadata.
+
+  CONTRACT 6 — train_Y reconstruction is method-aware.
+      Enforced by:
+        - data/raw.MethodTrajectory carries train_label.
+        - process.py::_reconstruct_X_Y dispatches on the string:
+            "y_obs"               → identity
+            "abs(y_obs - target)" → |y_obs − T|
+
+  CONTRACT 7 — Run metadata captures provenance.
+      Enforced by:
+        - common.logging.RunLogger.save_metadata records git commit, dirty
+          flag, sys.argv, Python version, platform, and UTC timestamp.
+
+  CONTRACT 8 — Smaller is better; statistics use one-sided RIGHT < WRONG.
+      Enforced by:
+        - common.statistics docstrings and analyze.py
+          mann_whitney_comparison(alternative="less") + rank_biserial /
+          cohens_d sign convention (positive = RIGHT better).
+
+
+================================================================================
+8. Where to add what
+================================================================================
+
+A short orientation guide for common modifications.
+
+  Add a benchmark
+    1. New class in benchmarks/toy.py inheriting SyntheticBenchmark.
+    2. Implement .f(X) and optionally .oracle_target_distance(T).
+    3. Add to BENCHMARK_REGISTRY in benchmarks/__init__.py.
+
+  Add a method (acquisition)
+    1. New class in acquisitions/ (or add to target_matching.py).
+    2. Add a spec to _METHOD_SPECS in run.py with train_label, transform,
+       acq_builder, use_fixed_noise.
+    3. Extend process.py::_reconstruct_X_Y if train_label is new.
+    4. Use the `right_*` / `wrong_*` prefix convention so analyze.py pairs it.
+
+  Add a final metric
+    1. Extend common.metrics or add to final_run_summary.
+    2. Add the field to data.processed.FinalScalars.
+    3. Populate it in process.py::_final_scalars.
+    4. Add the key to analyze.py::_FINAL_SCALAR_KEYS so it gets aggregated and
+       tested.
+
+  Add a calibration diagnostic
+    1. Add the function to common.diagnostics.
+    2. Include it in calibration_summary's return dict.
+    3. Add the key to analyze.py::_CALIB_TEST_GRID_KEYS (and the near-target
+       list if applicable).
+
+  Add a statistical test
+    1. Add a pure function to common.statistics.
+    2. Call it from analyze.py::_build_statistical_tests.
+
+  Add a config field
+    1. Add the key to configs/<run>.yaml.
+    2. Read it via config.get(...) in run.py, process.py, or analyze.py
+       depending on where it is consumed.
+    3. Save it in metadata.json if it is essential for provenance.
+
+
+================================================================================
+9. Cross-references between this document and documentation.txt
+================================================================================
+
+  documentation.txt §1 Global overview      ↔ code_structure.txt §0, §6
+  documentation.txt §2 RAW outputs           ↔ code_structure.txt §4.1, §5.1
+  documentation.txt §3 PROCESSED outputs     ↔ code_structure.txt §4.2, §5.2
+  documentation.txt §4 Aggregation           ↔ code_structure.txt §1.7, §5.3
+  documentation.txt §5 Temporal vs final     ↔ code_structure.txt §5.2
+  documentation.txt §6 Calibration pipeline  ↔ code_structure.txt §1.6, §5.2
+  documentation.txt §7 Scientific rationale  ↔ code_structure.txt §7
+  documentation.txt §8 Critical review       ↔ code_structure.txt §8
+
+================================================================================
+End of document
+================================================================================

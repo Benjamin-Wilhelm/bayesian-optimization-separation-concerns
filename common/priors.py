@@ -19,11 +19,21 @@ Experiment C).  Three building blocks:
   * SoC-violating baselines (``lambda_pi_*``): the prior becomes the GP
     prior mean ``f'(x) = pi_c(x)`` via :class:`PriorMeanModule`.
 
-- :class:`PriorMeanModule` — a GPyTorch mean module ``m(x) = lambda * pi(x)``
-  with ``lambda`` registered as a (optionally trainable) torch parameter, so
-  it is optimized **jointly** with the kernel hyperparameters by the standard
-  BoTorch / GPyTorch marginal-likelihood fitting procedure, and serialized
-  through ``state_dict`` like every other GP parameter.
+- :class:`PriorMeanModule` — a GPyTorch mean module
+  ``m(x) = lambda * f_prior(x)`` with ``f_prior(x) = baseline + amplitude *
+  pi(x)`` living on the observation (``y``) scale, and ``lambda`` registered
+  as a (optionally trainable) torch parameter, so it is optimized **jointly**
+  with the kernel hyperparameters by the standard BoTorch / GPyTorch
+  marginal-likelihood fitting procedure, and serialized through ``state_dict``
+  like every other GP parameter.
+
+  The ``(baseline, amplitude)`` pair is what keeps the prior mean on the same
+  scale as the targets ``y``: the spatial weight ``pi`` is dimensionless in
+  ``[0, 1]``, whereas ``f_prior`` is an estimate of the objective ``f``.  For
+  the raw-scale Experiment B benchmarks these come from
+  :meth:`benchmarks.oriented.OrientedBenchmark.prior_mean_scale`.  The legacy
+  default ``(baseline, amplitude) = (0, 1)`` reduces to ``m(x) = lambda *
+  pi(x)``.
 
 - :class:`PriorGPModelBuilder` — an extension (subclass) of
   :class:`common.models.GPModelBuilder` that attaches the prior mean module
@@ -40,6 +50,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional, Union
 
 import torch
+from torch.quasirandom import SobolEngine
 from botorch.models import FixedNoiseGP, SingleTaskGP
 from botorch.models.transforms.input import Normalize
 from botorch.models.transforms.outcome import Standardize
@@ -192,16 +203,22 @@ class GaussianPrior:
 # ---------------------------------------------------------------------------
 
 class PriorMeanModule(Mean):
-    r"""GPyTorch mean module ``m(x) = lambda * pi(x)``.
+    r"""GPyTorch mean module ``m(x) = lambda * f_prior(x)``.
 
     Implements the prior-mean GP
 
     .. math::
 
-        f \sim \mathcal{GP}(\lambda \, f', \, k_\theta),
-        \qquad f'(x) = \pi_c(x),
+        f \sim \mathcal{GP}(\lambda \, f_{\mathrm{prior}}, \, k_\theta),
+        \qquad f_{\mathrm{prior}}(x) = b + a \, \pi_c(x),
 
-    where ``lambda`` is a plain torch parameter (identity parameterization,
+    where ``b`` (``baseline``) and ``a`` (``amplitude``) place the prior mean
+    on the **observation (y) scale** — the same scale as the training targets
+    — while the spatial weight ``pi_c(x)`` stays dimensionless in ``[0, 1]``.
+    With the default ``(b, a) = (0, 1)`` this reduces to ``m(x) = lambda *
+    pi(x)``.
+
+    ``lambda`` is a plain torch parameter (identity parameterization,
     unconstrained).  With ``learn_lambda=True`` it is optimized jointly with
     the kernel hyperparameters by marginal-likelihood maximization; with
     ``learn_lambda=False`` it stays frozen at ``lambda_init`` (e.g. ``1.0``
@@ -211,16 +228,18 @@ class PriorMeanModule(Mean):
     :func:`common.models.serialize_state_dict` /
     :func:`common.models.load_state_dict_into`.
 
-    The prior's ``center`` and ``lengthscale`` are registered as buffers:
-    they are saved in the state dict for self-description but are not
-    trainable.
+    The prior's ``center``, ``lengthscale`` and the ``(baseline, amplitude)``
+    scaling are registered as buffers: they are saved in the state dict for
+    self-description but are not trainable.
 
     .. warning::
 
         The mean operates on whatever input representation the surrounding
         model feeds it.  When the GP uses a ``Normalize`` input transform,
         pass a prior already expressed in unit-cube coordinates (see
-        :meth:`GaussianPrior.transformed_to_unit_cube`).
+        :meth:`GaussianPrior.transformed_to_unit_cube`).  ``baseline`` and
+        ``amplitude`` are on the ``y`` scale and are therefore independent of
+        any input transform.
     """
 
     def __init__(
@@ -228,10 +247,22 @@ class PriorMeanModule(Mean):
         prior: GaussianPrior,
         lambda_init: float = 1.0,
         learn_lambda: bool = True,
+        baseline: float = 0.0,
+        amplitude: float = 1.0,
+        standardize_prior: bool = False,
+        prior_loc: float = 0.0,
+        prior_scale: float = 1.0,
+        standardization_fallback: bool = False,
         ) -> None:
         super().__init__()
         self.register_buffer("prior_center", prior.center.clone())
         self.register_buffer("prior_lengthscale", prior.lengthscale.clone())
+        self.register_buffer(
+            "baseline", torch.tensor(float(baseline), dtype=torch.double)
+        )
+        self.register_buffer(
+            "amplitude", torch.tensor(float(amplitude), dtype=torch.double)
+        )
         self.register_parameter(
             "raw_lambda",
             torch.nn.Parameter(torch.tensor(float(lambda_init), dtype=torch.double)),
@@ -239,6 +270,25 @@ class PriorMeanModule(Mean):
         if not learn_lambda:
             self.raw_lambda.requires_grad_(False)
         self.learn_lambda = bool(learn_lambda)
+        # Optional P-BO-style dynamic standardization of the prior weight:
+        # f_prior(x) = (pi(x) - prior_loc) / prior_scale  instead of
+        # baseline + amplitude * pi(x).  The extra buffers are registered ONLY
+        # in this mode, so the raw (baseline/amplitude) methods keep their exact
+        # state_dict keys and previously-saved snapshots still reconstruct.
+        self.standardize_prior = bool(standardize_prior)
+        if self.standardize_prior:
+            self.register_buffer(
+                "prior_loc", torch.tensor(float(prior_loc), dtype=torch.double)
+            )
+            self.register_buffer(
+                "prior_scale", torch.tensor(float(prior_scale), dtype=torch.double)
+            )
+            self.register_buffer(
+                "standardization_fallback",
+                torch.tensor(
+                    1.0 if standardization_fallback else 0.0, dtype=torch.double
+                ),
+            )
 
     @property
     def lambda_value(self) -> float:
@@ -251,12 +301,32 @@ class PriorMeanModule(Mean):
         z = (x - c) / l
         return torch.exp(-0.5 * z.pow(2).sum(dim=-1))
 
+    def _f_prior(self, x: torch.Tensor) -> torch.Tensor:
+        """Prior-mean function on the GP's target scale.
+
+        Two mutually-exclusive parameterizations:
+
+        - raw:          ``f_prior(x) = baseline + amplitude * pi(x)`` (y scale);
+        - standardized: ``f_prior(x) = (pi(x) - prior_loc) / prior_scale``, a
+          z-scored weight used together with a ``Standardize(Y)`` outcome
+          transform so ``lambda`` couples two O(1) standardized quantities
+          rather than absorbing the raw objective scale.
+        """
+        pi = self._pi(x)
+        if self.standardize_prior:
+            loc = self.prior_loc.to(dtype=x.dtype, device=x.device)
+            scale = self.prior_scale.to(dtype=x.dtype, device=x.device)
+            return (pi - loc) / scale
+        b = self.baseline.to(dtype=x.dtype, device=x.device)
+        a = self.amplitude.to(dtype=x.dtype, device=x.device)
+        return b + a * pi
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Mean ``lambda * pi(x)`` for ``x`` of shape ``(..., n, d)``.
+        """Mean ``lambda * f_prior(x)`` for ``x`` of shape ``(..., n, d)``.
 
         Returns shape ``(..., n)`` as required by GPyTorch mean modules.
         """
-        return self.raw_lambda * self._pi(x)
+        return self.raw_lambda * self._f_prior(x)
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +364,19 @@ class PriorGPModelBuilder(GPModelBuilder):
             coordinates**.  ``None`` keeps the default constant mean.
         lambda_init: Initial value of ``lambda``.
         learn_lambda: Whether ``lambda`` is trained by MLL fitting.
+        prior_baseline: ``baseline`` of the prior-mean function
+            ``f_prior(x) = baseline + amplitude * pi(x)``, on the ``y`` scale.
+        prior_amplitude: ``amplitude`` of the prior-mean function, on the
+            ``y`` scale.  The default ``(0, 1)`` reduces to ``m = lambda *
+            pi``.
     """
+
+    # Numerical floor for the prior-weight standard deviation; also the
+    # threshold below which the per-train-point estimate is judged degenerate
+    # and the dense-grid fallback is used instead.
+    _PRIOR_STD_EPS: float = 1e-6
+    # Deterministic dense grid used for the standardization fallback.
+    _FALLBACK_GRID_SIZE: int = 4096
 
     def __init__(
         self,
@@ -304,6 +386,9 @@ class PriorGPModelBuilder(GPModelBuilder):
         prior: Optional[GaussianPrior] = None,
         lambda_init: float = 1.0,
         learn_lambda: bool = True,
+        prior_baseline: float = 0.0,
+        prior_amplitude: float = 1.0,
+        standardize_prior_mean: bool = False,
         ) -> None:
         super().__init__(config)
         self.bounds = (
@@ -312,14 +397,31 @@ class PriorGPModelBuilder(GPModelBuilder):
         self.prior = prior
         self.lambda_init = float(lambda_init)
         self.learn_lambda = bool(learn_lambda)
-        if prior is not None and self.config.standardize_output:
+        self.prior_baseline = float(prior_baseline)
+        self.prior_amplitude = float(prior_amplitude)
+        self.standardize_prior_mean = bool(standardize_prior_mean)
+        # The raw (baseline/amplitude) prior mean lives on the y scale and is
+        # incompatible with a Standardize outcome transform.  The standardized
+        # prior mode is the exception: it *requires* Standardize(Y) because the
+        # prior weight pi(x) is itself z-scored, so both sides of lambda are
+        # standardized and lambda stays dimensionless.
+        if (
+            prior is not None
+            and self.config.standardize_output
+            and not self.standardize_prior_mean
+        ):
             raise ValueError(
-                "PriorGPModelBuilder with a prior mean requires "
+                "PriorGPModelBuilder with a (raw) prior mean requires "
                 "standardize_output=False: a Standardize outcome transform "
                 "would rescale the targets while the mean module "
-                "lambda * pi(x) stays on the raw observation scale.  "
-                "Experiment B uses output-normalized benchmarks, so "
-                "standardization is unnecessary."
+                "lambda * f_prior(x) stays on the raw observation scale, so "
+                "lambda would have to absorb the scale mismatch instead of "
+                "learning a genuine prior/objective alignment.  The "
+                "raw prior-to-the-mean methods therefore disable "
+                "standardization and rely on f_prior being built on the y "
+                "scale.  Use standardize_prior_mean=True (with "
+                "standardize_output=True) for the P-BO-style standardized "
+                "variant."
             )
 
     def construct(
@@ -356,23 +458,101 @@ class PriorGPModelBuilder(GPModelBuilder):
             mean_prior = self.prior
             if self.config.normalize_input and self.bounds is not None:
                 mean_prior = self.prior.transformed_to_unit_cube(self.bounds)
-            model.mean_module = PriorMeanModule(
-                prior=mean_prior,
-                lambda_init=self.lambda_init,
-                learn_lambda=self.learn_lambda,
-            ).to(torch.double)
+            if self.standardize_prior_mean:
+                loc, scale, fallback = self._prior_standardization(train_X)
+                model.mean_module = PriorMeanModule(
+                    prior=mean_prior,
+                    lambda_init=self.lambda_init,
+                    learn_lambda=self.learn_lambda,
+                    standardize_prior=True,
+                    prior_loc=loc,
+                    prior_scale=scale,
+                    standardization_fallback=fallback,
+                ).to(torch.double)
+            else:
+                model.mean_module = PriorMeanModule(
+                    prior=mean_prior,
+                    lambda_init=self.lambda_init,
+                    learn_lambda=self.learn_lambda,
+                    baseline=self.prior_baseline,
+                    amplitude=self.prior_amplitude,
+                ).to(torch.double)
 
         model.to(train_X.device)
         model.eval()
         return model
 
+    # ------------------------------------------------------------------
+    # Prior-weight standardization (P-BO-style)
+    # ------------------------------------------------------------------
+
+    def _fallback_grid(self) -> torch.Tensor:
+        """Deterministic dense grid over the domain for standardization.
+
+        Used when the prior weight has (near-)zero spread across the training
+        inputs (e.g. a single initial point, or all points far from the prior
+        center), so ``pi(X_train).std()`` cannot define a usable scale.
+        Native-domain coordinates, shape ``(G, dim)``.
+        """
+        d = self.prior.dim
+        engine = SobolEngine(dimension=d, scramble=True, seed=0)
+        u = engine.draw(self._FALLBACK_GRID_SIZE).to(torch.double)  # in [0, 1]^d
+        if self.bounds is not None:
+            lb, ub = self.bounds[0], self.bounds[1]
+            return lb + (ub - lb) * u
+        return u
+
+    def _prior_standardization(
+        self,
+        train_X: torch.Tensor,
+        ) -> tuple[float, float, bool]:
+        """``(prior_loc, prior_scale, fallback_used)`` for the standardized prior.
+
+        ``pi`` is z-scored over the training inputs.  When that spread is below
+        :attr:`_PRIOR_STD_EPS` (degenerate, e.g. one initial point) the
+        statistics are taken from a deterministic dense grid instead, and the
+        fallback flag is set.  ``prior_scale`` is floored at the same eps.
+        """
+        p = self.prior.evaluate(train_X.to(torch.double)).reshape(-1)
+        loc = p.mean() if p.numel() else torch.zeros((), dtype=torch.double)
+        scale = (
+            p.std(unbiased=False)
+            if p.numel() >= 2
+            else torch.zeros((), dtype=torch.double)
+        )
+        fallback = bool(scale < self._PRIOR_STD_EPS)
+        if fallback:
+            pg = self.prior.evaluate(self._fallback_grid()).reshape(-1)
+            loc = pg.mean()
+            scale = pg.std(unbiased=False)
+        scale = scale.clamp_min(self._PRIOR_STD_EPS)
+        return float(loc), float(scale), fallback
+
     def extract_hyperparameters(self, model: Any) -> dict[str, Any]:
-        """Parent extraction plus the prior-mean ``lambda`` when present."""
+        """Parent extraction plus prior-mean / standardization diagnostics.
+
+        Adds ``lambda`` (and ``lambda_learned``) for any prior-mean GP, and,
+        for the standardized variant, the prior z-scoring stats
+        (``prior_loc``, ``prior_scale``, ``standardization_fallback``) and the
+        outcome-transform stats (``y_mean``, ``y_std``).  The kernel
+        ``outputscale`` / ``lengthscale`` and ``noise_variance_{raw,
+        standardized}`` already come from the parent extractor.
+        """
         params = super().extract_hyperparameters(model)
         mean = getattr(model, "mean_module", None)
         if isinstance(mean, PriorMeanModule):
             params["lambda"] = mean.lambda_value
             params["lambda_learned"] = mean.learn_lambda
+            if mean.standardize_prior:
+                params["prior_loc"] = float(mean.prior_loc.item())
+                params["prior_scale"] = float(mean.prior_scale.item())
+                params["standardization_fallback"] = bool(
+                    mean.standardization_fallback.item() > 0.5
+                )
+        outcome = getattr(model, "outcome_transform", None)
+        if outcome is not None and hasattr(outcome, "means") and hasattr(outcome, "stdvs"):
+            params["y_mean"] = float(outcome.means.detach().mean().item())
+            params["y_std"] = float(outcome.stdvs.detach().mean().item())
         return params
 
 

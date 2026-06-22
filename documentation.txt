@@ -1,0 +1,990 @@
+================================================================================
+Experimental Output Pipeline — Conceptual Map
+================================================================================
+
+This document describes the actual pipeline implemented in this repository for
+`exp_a_target_matching` (sine_trend_1d, branin_2d, ...). It is grounded in
+`experiments/exp_a_target_matching/{run,process,analyze}.py`, the
+`data/{raw,processed}.py` schemas, `common/{statistics,metrics,diagnostics,
+logging}.py`, and the run directories already present under `results/`.
+
+Throughout, the convention is MINIMISATION of |f(x) - T|, where T is the
+target. The two compared methods are:
+
+  - RIGHT = right_target_matching_ucb
+      GP fit on raw y_obs; target lives inside the acquisition
+      (TargetMatchingUCB).
+
+  - WRONG = wrong_gp_on_abs_lcb
+      GP fit on |y_obs - T|; the acquisition is just LCB.
+
+
+================================================================================
+1. Global pipeline overview
+================================================================================
+
+The pipeline is split into THREE STRICT STAGES, separated by file boundaries on
+disk:
+
+    [ run.py ]           generation stage — touches the world, runs BO,
+           │             knows benchmarks
+           ▼
+    [ raw/<benchmark>/seed_NNN.json ]    one paired file per (benchmark, seed)
+           │
+    [ process.py ]       per-seed derivation stage — pure function of the raw
+           │             file. Reconstructs GPs (no MLL), evaluates on test
+           │             grid.
+           ▼
+    [ processed/per_seed/<benchmark>/seed_NNN_processed.json ]
+           │
+    [ analyze.py ]       across-seed aggregation stage — never reloads raw.
+           │             The ONLY stage that mixes seeds.
+           ▼
+    [ processed/aggregate/<benchmark>/{
+          final_performance, convergence_curves,
+          calibration_summary, statistical_tests}.json ]
+           │
+    [ make_figures.py (not yet implemented) ]
+           ▼
+    [ figures/ ]
+
+The four conceptual layers map onto code locations like this:
+
+  Online (during BO) — depends on the random draw of noise and on optimiser
+  state. Includes acquired x_t, y_obs_t, f_noiseless_t, acq_value_t, posterior
+  mean/std at the candidate, and a serialised GP state dict.
+      Computed in: run.py::_run_one_method
+      Output:      raw/.../seed_NNN.json
+
+  Per-seed post-processing — deterministic function of (raw seed file, config).
+  Includes convergence curves, final scalars, calibration on a held-out grid
+  (with GPs rebuilt from snapshots).
+      Computed in: process.py::_process_one_seed
+      Output:      processed/per_seed/.../seed_NNN_processed.json
+
+  Across-seed aggregation — statistics over the ensemble of seeds: descriptive
+  summaries, bootstrap CI curves, pairwise Mann–Whitney / rank-biserial /
+  Cohen's d.
+      Computed in: analyze.py
+      Output:      processed/aggregate/<benchmark>/*.json
+
+  Paper-level statistics & figures — the contents of processed/aggregate ALREADY
+  ARE the paper-level statistics; figures/ will hold rendered versions.
+      Computed in: (to be implemented in make_figures.py)
+      Output:      figures/*.{pdf,png}
+
+The boundary "online vs post-processing" is enforced by the schema in
+data/raw.py: raw files store ONLY trajectory-level information (one StepRecord
+per iteration, one ModelSnapshot per iteration). They contain no aggregated
+quantities. The boundary "per-seed vs across-seed" is enforced by process.py
+only ever loading ONE seed file at a time, while analyze.py is the ONLY module
+that ever opens multiple processed files.
+
+
+================================================================================
+2. RAW outputs
+================================================================================
+
+A run.py invocation writes the following layout under
+`results/exp_a_target_matching/runs/<RUN_ID>/`, where <RUN_ID> is
+`YYYY-MM-DD_HH-MM-SS_<tag>` (UTC, made by common.logging.make_run_id):
+
+    config.json                 # exact YAML config saved as JSON, once per run
+    metadata.json               # auto-captured run metadata, once per run
+    logs/run.log                # per-iteration text log, appended online
+    raw/<benchmark>/
+        seed_001.json           # one paired file per seed, written at end of seed
+        seed_002.json
+        ...
+
+
+--------------------------------------------------------------------------------
+2.1 config.json
+--------------------------------------------------------------------------------
+
+Content: the YAML config verbatim — experiment name, benchmark, list of seeds,
+target T, beta for UCB, initial_design_size, budget, noise_std, optimiser knobs
+(num_restarts, raw_samples), list of methods, optional epsilon (hitting-time
+tolerance), optional failure_threshold, test_grid: {n_test, seed}, optional
+near_target_epsilon, optional calibration_every.
+
+Produced: once, at the start of the run.
+
+Necessity: reproducibility (this is the contract for everything downstream).
+process.py reads it back to recover epsilon, failure_threshold,
+near_target_epsilon, and test-grid settings — none of which appear in the raw
+seed JSON.
+
+
+--------------------------------------------------------------------------------
+2.2 metadata.json
+--------------------------------------------------------------------------------
+
+Content (built in RunLogger.save_metadata): UTC timestamp, Python version,
+platform, current Git commit and dirty flag, sys.argv, plus an `extra` dict that
+re-records experiment/benchmark/tag/seeds/target/budget/noise_std/methods.
+
+Produced: once, at the start of the run.
+
+Necessity: reproducibility / provenance only. Not consumed by process.py or
+analyze.py. Critical for paper claims about the exact code version that
+produced a result.
+
+
+--------------------------------------------------------------------------------
+2.3 logs/run.log
+--------------------------------------------------------------------------------
+
+Content: human-readable per-iteration log — chosen acquisition value, f(x_t),
+|f(x_t) - T|, plus seed-level banners.
+
+Produced: streamed online, append-only.
+
+Necessity: debugging only. Recomputable from the raw JSON. Not used in any
+downstream computation.
+
+
+--------------------------------------------------------------------------------
+2.4 raw/<benchmark>/seed_NNN.json — the central object
+--------------------------------------------------------------------------------
+
+This is the only data artifact that records what actually happened during the
+BO loop. Its schema is RawSeedData in data/raw.py:
+
+    RawSeedData
+    ├── metadata         : SeedMetadata
+    ├── initial_design   : InitialDesign     (shared by ALL methods of this seed)
+    └── methods : {
+            "right_target_matching_ucb": MethodTrajectory,
+            "wrong_gp_on_abs_lcb":       MethodTrajectory,
+       }
+
+Each MethodTrajectory contains, for the same seed:
+  - train_label: "y_obs" (RIGHT) or "abs(y_obs - target)" (WRONG) — recipe
+    needed by process.py to rebuild train_Y from raw observations.
+  - trajectory: an ordered list of StepRecord (length = budget).
+  - model_snapshots: an ordered list of ModelSnapshot (length = budget).
+
+
+2.4.1 SeedMetadata
+------------------
+
+Copy of all the things needed to identify and bound the run: experiment,
+problem_type ("synthetic" here), benchmark, seed, budget, initial_design_size,
+target, noise_std, dim, bounds. Saved once per seed. SELF-CONTAINED: the
+processed file copies it verbatim, so analyse.py never has to look back at raw.
+
+
+2.4.2 InitialDesign
+-------------------
+
+  - X (shape (n_init, dim)),
+  - y_obs (shape (n_init,)),
+  - f_noiseless (shape (n_init,)).
+
+SHARED ACROSS BOTH METHODS of the same seed (this is the paired-design
+property).
+
+Produced by sobol_design(bounds, n_init, seed=seed) followed by
+problem.observe(X_init) in run.py::_run_one_seed. The Sobol scramble seed
+equals the BO seed, so the initial design is fully reproducible from
+(benchmark, seed, n_init).
+
+
+2.4.3 StepRecord — one BO iteration
+-----------------------------------
+
+Per iteration t = 1..budget, the run loop records:
+
+  - iteration:                       1-based iteration index
+                                     (initial design is NOT counted).
+  - x:                               the queried candidate (list of dim floats).
+  - y_obs:                           noisy observation returned by
+                                     problem.observe.
+  - f_noiseless:                     noiseless ground truth at x_t
+                                     (synthetic only; None for real-data
+                                     problems by contract — not exercised yet).
+  - acq_value:                       acquisition value at the maximiser
+                                     returned by optimize_acqf.
+  - train_size:                      initial_design_size + iteration - 1
+                                     (size of training set BEFORE this query
+                                     was added).
+  - posterior_mean_at_candidate,
+    posterior_std_at_candidate:      GP posterior at x_t BEFORE the candidate
+                                     was added (using the snapshot's GP).
+
+Trajectories are accumulated online and written ONCE at the end of the seed.
+
+
+2.4.4 ModelSnapshot — one fitted GP per iteration
+-------------------------------------------------
+
+For each BO iteration, BEFORE the candidate is observed and added to the
+training set, _capture_snapshot records:
+
+  - iteration.
+  - model_type ("SingleTaskGP" or "FixedNoiseGP" — derived from whether the
+    method's noise is known).
+  - kernel_name (e.g. "matern52").
+  - noise_std: the observation noise injected by FixedNoiseGP. Stored so
+    process.py can rebuild train_Yvar. For the WRONG method this is None
+    because the GP infers noise from data.
+  - state_dict: JSON-serialised torch.nn.Module.state_dict() — includes raw
+    lengthscales, outputscale, prior parameters (concentration/rate),
+    constraint bounds, input-normalisation min/range, outcome-standardisation
+    mean/std. SUFFICIENT TO FULLY RESTORE THE GP via
+    construct(train_X, train_Y) + load_state_dict_into.
+  - hyperparameters: pre-parsed scalars (lengthscale, outputscale,
+    noise_variance_raw, noise_variance_standardized, outcome_std) for HUMAN
+    INSPECTION ONLY — not used in reconstruction.
+
+Each snapshot is produced INLINE during the BO loop (one per iteration). The
+full list is serialised together with the trajectory at the end of the seed.
+There are `budget` snapshots per (seed, method).
+
+
+2.4.5 Necessity summary for raw outputs
+---------------------------------------
+
+  Quantity                                | Reprod. | Post-hoc | Calib. | Recomputable later?
+  ----------------------------------------|---------|----------|--------|---------------------
+  config.json                             |   yes   |   yes    |  yes   | No
+  metadata.json                           |   yes   |   no     |  no    | No (Git state)
+  InitialDesign                           |   yes   |   yes    |  yes   | Yes from
+                                          |         |          |        | (benchmark, seed, n_init)
+  StepRecord                              |   yes   |   yes    |  yes   | Only by re-running BO
+  acq_value                               |    –    |  diag    |  no    | Yes (re-fit GP +
+                                          |         |          |        | reoptim) — not done
+  posterior_mean/std @ candidate          |    –    |  diag    |  no    | Yes from snapshot —
+                                          |         |          |        | slight redundancy
+  f_noiseless                             |    –    |   yes    | indir. | Yes (analytic) but
+                                          |         |          |        | cheap to record
+  ModelSnapshot.state_dict                |    –    |    –     |  yes   | No (would need re-fit,
+                                          |         |          |        | non-determ.)
+  hyperparameters                         |    –    |  diag    |   –    | Yes from state_dict
+  logs/run.log                            |    –    |    –     |   –    | Yes
+
+
+2.4.6 Things deliberately NOT stored in raw
+-------------------------------------------
+
+  - train_X, train_Y at each iteration (rebuilt by process._reconstruct_X_Y
+    from InitialDesign + trajectory[:t-1]).
+  - Any aggregated metric (final regret, AUC, ...).
+  - Any across-seed quantity.
+  - Predictions on the held-out test grid (rebuilt from snapshots in
+    process.py).
+
+This is the most important invariant of the design: RAW FILES CONTAIN TRAJECTORY
+FACTS ONLY; everything downstream is a deterministic function of (raw seed,
+config).
+
+
+================================================================================
+3. PROCESSED outputs
+================================================================================
+
+process.py reads ONE raw seed file at a time and produces a ProcessedSeedData
+JSON (data/processed.py) at:
+
+    processed/per_seed/<benchmark>/seed_NNN_processed.json
+
+
+--------------------------------------------------------------------------------
+3.1 ProcessedSeedData — top-level
+--------------------------------------------------------------------------------
+
+    {
+      "metadata":          SeedMetadata (copied verbatim from raw),
+      "target":            float,
+      "epsilon":           float | null,
+      "failure_threshold": float | null,
+      "oracle_best":       float,   # min_x |f(x) - T|, from
+                                    # problem.oracle_target_distance(T);
+                                    # 0 when target attainable
+      "test_grid":         {"n_test": int, "seed": int},
+      "methods": {
+          "<method>": MethodProcessed
+      }
+    }
+
+`oracle_best` is the ANALYTIC LOWER BOUND on |f - T| over the domain (zero for
+sine_trend_1d if T = 0.5 lies in the range; otherwise the benchmark's analytic
+value). All target regrets are defined as distance MINUS this lower bound.
+
+
+--------------------------------------------------------------------------------
+3.2 MethodProcessed
+--------------------------------------------------------------------------------
+
+    {
+      "train_label": "y_obs" | "abs(y_obs - target)",
+      "final":       FinalScalars,
+      "convergence": ConvergenceCurves,
+      "calibrations": list[CalibrationReport]   # checkpointed along the BO
+                                                # trajectory
+    }
+
+train_label is propagated forward so the processed file is self-describing:
+analyze.py can reason about RIGHT vs WRONG without re-reading raw.
+
+
+--------------------------------------------------------------------------------
+3.3 FinalScalars — end-of-run summary
+--------------------------------------------------------------------------------
+
+Computed over the FULL evaluation history of length
+n_evaluations = initial_design_size + budget (initial design + BO iterations),
+driven by the noiseless trajectory f_history. Built by process._final_scalars
+→ common.metrics.final_run_summary + a few extras.
+
+  Field                              | Definition
+  -----------------------------------|----------------------------------------------
+  n_evaluations                      | initial_design_size + budget
+  final_best_target_distance         | min_t |f(x_t) - T|
+  final_target_simple_regret         | above − oracle_best (zero when target attainable)
+  mean_inst_target_distance          | mean over t of |f(x_t) - T|
+  median_inst_target_distance        | median over t of |f(x_t) - T|
+  worst_inst_target_distance         | max_t |f(x_t) - T|
+  cumulative_inst_target_regret      | Σ_t (|f(x_t)-T| - oracle_best)
+  cumulative_bsf_target_regret       | Σ_t (min_{s≤t}|f(x_s)-T| - oracle_best)
+  auc_running_target_regret          | trapezoidal AUC of the running-best regret
+                                     | curve clamped at 0
+  hitting_time                       | first t with BSF_t ≤ epsilon;
+                                     | n_evaluations + 1 if never;
+                                     | None if epsilon not set
+  failure_indicator                  | 1{final_best_target_distance > failure_threshold}
+                                     | (or None)
+  best_x                             | the argmin point that realised
+                                     | final_best_target_distance
+
+Information lost relative to raw: yes — these are scalar reductions of the
+trajectory. They cannot be inverted back. But raw is preserved, so this is a
+one-way summary, not destruction.
+
+
+--------------------------------------------------------------------------------
+3.4 ConvergenceCurves — full time series
+--------------------------------------------------------------------------------
+
+Same length as n_evaluations. The iteration axis covers the WHOLE history:
+indices 1...initial_design_size are the Sobol points, then
+initial_design_size+1...n_evaluations are the BO iterations. This is important
+for the convergence-curve plot: the initial design appears as a flat or
+fluctuating start before BO kicks in.
+
+  Field                            | Definition
+  ---------------------------------|------------------------------------------
+  iteration                        | [1, 2, ..., n_evaluations]
+  instantaneous_target_distance    | |f(x_t) - T|
+  running_best_target_distance     | min_{s≤t} |f(x_s)-T|
+  cumulative_inst_target_regret    | running sum of (|f-T| - oracle_best)
+  cumulative_bsf_target_regret     | running sum of running-best regret
+
+These four arrays are the inputs analyze.py resamples for bootstrap CIs.
+
+
+--------------------------------------------------------------------------------
+3.5 CalibrationReport (list) — held-out GP calibration
+--------------------------------------------------------------------------------
+
+For each method, process._calibration_reports walks the ModelSnapshots list and
+produces a report at EVERY snapshot whose iteration is a multiple of
+calibration_every PLUS the final iteration (so e.g. every=5, budget=50 ⇒ ~10
+checkpoints). The currently-shipped runs have 10 calibration checkpoints per
+(seed, method).
+
+For each checkpoint:
+
+  1. Reconstruct train_X, train_Y at the snapshot's iteration from
+     InitialDesign + trajectory[:iter-1], applying the method-specific
+     train_label transform (y_obs for RIGHT, |y_obs - T| for WRONG).
+  2. Build a fresh GP with the same GPModelConfig, then
+     load_state_dict_into(model, snapshot.state_dict). NO MLL FITTING —
+     the deterministic state dict reproduces the trained GP bit-for-bit.
+  3. Evaluate the posterior at
+     X_test = benchmark.test_set(n_test, seed=test_grid_seed). The same X_test
+     is used for both methods on the same seed, and the same seed for the test
+     grid is used across all BO seeds — i.e. X_test depends ONLY on
+     (benchmark, n_test, test_grid_seed).
+  4. Choose ground truth: y_true = f(X_test) for RIGHT (modelling f),
+     y_true = |f(X_test) - T| for WRONG (modelling the transformed quantity).
+  5. Compute calibration_summary (NLPD, 95% coverage, mean/std/abs of
+     standardised residuals, PIT mean/std, β-confidence violation rate at β=2)
+     on the full grid.
+  6. If near_target_epsilon is configured, restrict to
+     {i : |f(X_test_i) - T| ≤ near_target_epsilon} and recompute the same
+     calibration summary; record near_target_count, near_target_fraction.
+     NOTE: the near-target mask is ALWAYS defined against raw f, regardless of
+     what the GP models — this is the right SoC-aligned choice.
+  7. Also save the per-point predictions = (X_test, y_true, posterior_mean,
+     posterior_std) so that calibration plots (PIT histograms, residual
+     scatter, posterior overlays) can be regenerated downstream without
+     re-running process.py. With n_test=256 and 10 checkpoints, this adds
+     ≈ 256×4×10 = 10k floats per (seed, method).
+
+The report stores iteration_index, n_test, test_grid_seed, test_grid (full-grid
+summary), near_target (subset summary or None), predictions (per-point grid).
+
+
+--------------------------------------------------------------------------------
+3.6 What goes lost vs. raw in the per-seed processed file?
+--------------------------------------------------------------------------------
+
+  - Raw y_obs time series — no longer first-class; only f_noiseless history is
+    consulted for metric construction. (Calibration uses f(X_test), not
+    training observations.)
+  - acq_value per iteration — discarded by process.py (it lives only in raw).
+  - state_dict of the GP — used for posterior reconstruction during processing,
+    then dropped.
+  - hyperparameters per iteration — currently discarded by process.py.
+    (See Section 8: possibly worth surfacing.)
+
+
+================================================================================
+4. Aggregation across seeds — analyze.py
+================================================================================
+
+This is the ONLY stage that mixes seeds. For each benchmark B, it loads every
+seed_NNN_processed.json in processed/per_seed/<B>/, builds a list
+seeds: list[ProcessedSeedData], then writes four files under
+processed/aggregate/<B>/.
+
+
+--------------------------------------------------------------------------------
+4.1 final_performance.json
+--------------------------------------------------------------------------------
+
+Per method, per scalar from _FINAL_SCALAR_KEYS:
+  final_best_target_distance, final_target_simple_regret,
+  mean_inst_target_distance, worst_inst_target_distance,
+  cumulative_inst_target_regret, cumulative_bsf_target_regret,
+  auc_running_target_regret, hitting_time
+
+it stacks the per-seed values (dropping Nones) and applies
+common.statistics.summarize_sample:
+
+    {n, mean, std, stderr, median, q25, q75, min, max, q90, q95}
+
+Plus, when failure_indicator is present, the empirical FAILURE RATE =
+mean(values > 0.5) over the binary indicator.
+
+Mean and median are reported side by side. The MEDIAN + q25/q75 is robust to
+catastrophic outliers (a single seed that never enters the target basin), while
+MEAN + std describes the parametric centre and supports tail-risk via
+q90/q95.
+
+
+--------------------------------------------------------------------------------
+4.2 convergence_curves.json
+--------------------------------------------------------------------------------
+
+Per method, per curve key (instantaneous_target_distance,
+running_best_target_distance, cumulative_inst_target_regret,
+cumulative_bsf_target_regret):
+
+  1. Stack into a matrix `curves` of shape (n_seeds, n_steps)
+     (n_steps = n_evaluations).
+  2. Compute the POINT STATISTIC at each step (median by default; mean
+     available via --statistic).
+  3. POINTWISE BOOTSTRAP CI (default n_bootstrap=5000, default
+     confidence=0.95): in bootstrap_ci_curves, draw n_bootstrap resamples of
+     the SEED AXIS (rows) with replacement, recompute the chosen step-wise
+     statistic on each resample, and report lower = percentile(2.5%),
+     upper = percentile(97.5%) across bootstrap replicates at each step.
+
+The output is {center, lower, upper} arrays of length n_steps per
+(method, curve).
+
+
+  Bootstrap conceptually (why it is appropriate here)
+  ---------------------------------------------------
+
+  - What's being resampled: SEEDS (rows). Each seed represents one independent
+    draw from the joint distribution of (Sobol scramble, noise realisations,
+    optimiser stochasticity).
+
+  - What it approximates: the sampling distribution of the CENTRAL TENDENCY
+    (median or mean) of the convergence curve across the population of
+    hypothetical seeds, AT EACH ITERATION INDEX, under the assumption that
+    the observed seeds are i.i.d. from that population.
+
+  - Why it fits: no parametric assumption is made on the per-iteration metric
+    distribution. Target-distance values are heavily skewed and bounded below
+    by zero, so symmetric Gaussian CIs would lie under zero. Bootstrap CIs
+    respect support.
+
+  - Implicit assumptions:
+      1. Seeds are exchangeable across runs.
+      2. The CI is POINTWISE, not simultaneous: it does NOT control the
+         family-wise error rate across iteration indices. Reading "the curve
+         stays inside the CI envelope" as a joint statement is wrong.
+      3. The estimator (median/mean) is what is bootstrapped; the central
+         tendency, not individual realisations.
+      4. Bootstrap struggles with very small samples — with 20 seeds, the
+         median is on solid ground; with 5 seeds it is noisy.
+
+
+--------------------------------------------------------------------------------
+4.3 calibration_summary.json
+--------------------------------------------------------------------------------
+
+Per method, per scalar in _CALIB_TEST_GRID_KEYS (nlpd, coverage,
+mean_standardized_residual, std_standardized_residual,
+mean_abs_standardized_residual, pit_mean, pit_std,
+confidence_violation_rate), aggregated using summarize_sample over seeds. Same
+structure for near_target (with the extra near_target_count,
+near_target_fraction).
+
+CRITICAL DETAIL — _stack_calibration takes calibrations[-1]: only the FINAL
+calibration checkpoint is aggregated across seeds. The earlier checkpoints sit
+unused in this aggregate file. This makes the aggregate calibration a "GP
+quality at the end of the BO loop" summary, not a time-series.
+
+
+--------------------------------------------------------------------------------
+4.4 statistical_tests.json
+--------------------------------------------------------------------------------
+
+For every (RIGHT, WRONG) pair (pairing logic: methods starting with right_*
+× methods starting with wrong_*), and for each _FINAL_SCALAR_KEYS scalar:
+
+  Test                          | What it answers
+  ------------------------------|--------------------------------------------------
+  Mann–Whitney U                | One-sided null RIGHT ≥ WRONG. Reject ⇒ RIGHT
+  (alternative="less")          | values are stochastically smaller (better, since
+                                | smaller is better). Distribution-free,
+                                | rank-based; robust to skew.
+
+  Rank-biserial correlation     | ρ = P(W > R) − P(W < R) across all n_R × n_W
+                                | pairs (ties neutral). Positive ⇒ RIGHT wins
+                                | more often. Effect size between −1 and +1.
+
+  Cohen's d                     | (mean_W − mean_R) / pooled_std. Positive ⇒
+  (right-better convention)     | RIGHT has smaller mean. Parametric standardised
+                                | effect size.
+
+  Failure rates                 | When failure_threshold is set,
+                                | right_failure_rate and wrong_failure_rate are
+                                | reported alongside (raw fractions, not a test).
+
+This separation is intentional: the P-VALUE answers "is the difference
+detectable?" while RANK-BISERIAL and COHEN'S D answer "how big is it?" — they
+complement each other.
+
+CAVEAT: tests are run per-metric independently. With 8 metrics × N pairs, no
+multiple-comparisons correction is applied. For a paper, you would interpret
+final_target_simple_regret (or cumulative_*) as the PRE-REGISTERED headline
+metric and treat the rest as secondary.
+
+CAVEAT — paired vs unpaired: seeds are technically paired (same Sobol initial
+design and same torch.manual_seed). Mann–Whitney is an UNPAIRED test, so the
+paired structure is unused at this layer. A Wilcoxon signed-rank test on the
+per-seed difference would be strictly more powerful and is a natural extension.
+
+
+================================================================================
+5. Temporal vs final quantities
+================================================================================
+
+  Computed                            | Stored as                         | Layer
+  ------------------------------------|-----------------------------------|-----------------------------
+  Per iteration, online               | StepRecord                        | raw
+                                      | (x, y_obs, f_noiseless,           |
+                                      |  acq_value, posterior_mean/std    |
+                                      |  @ candidate, train_size),        |
+                                      | ModelSnapshot                     |
+                                      |                                   |
+  Per iteration, post-hoc             | ConvergenceCurves                 | processed/per_seed
+                                      | (4 arrays of length n_evaluations)|
+                                      |                                   |
+  Final scalar                        | FinalScalars (12 fields)          | processed/per_seed
+                                      |                                   |
+  Per snapshot (calib. checkpoints)   | CalibrationReport                 | processed/per_seed
+                                      | (with full per-point predictions) |
+                                      |                                   |
+  Per scalar, aggregated across seeds | summarize_sample block            | processed/aggregate/
+                                      | (mean/std/quartiles/q90/q95)      | final_performance.json
+                                      |                                   |
+  Per curve, aggregated across seeds  | {center, lower, upper} of length  | processed/aggregate/
+                                      | n_steps                           | convergence_curves.json
+                                      |                                   |
+  Per scalar, pairwise comparison     | {mann_whitney, rank_biserial,     | processed/aggregate/
+                                      |  cohens_d_right_better,           | statistical_tests.json
+                                      |  failure_rates}                   |
+
+
+Sensitivity to catastrophic failures / instability
+---------------------------------------------------
+
+  - mean_inst_target_distance, cumulative_*, auc_running_target_regret:
+    SENSITIVE — a single non-converging seed inflates them disproportionately.
+    The MEDIAN + IQR in final_performance.json and MEDIAN CURVE + bootstrap CI
+    in convergence_curves.json are the natural robustness layer; the MEAN is
+    reported alongside as a tail-sensitive complement.
+
+  - worst_inst_target_distance: by construction tail-dominated; useful as an
+    "even the worst step" diagnostic, but uninformative if the initial design
+    happens to be unlucky for a single seed.
+
+  - hitting_time with the convention n_evaluations + 1 when never hit: capped,
+    but the cap is fragile — a seed that barely misses ε gets the same
+    hitting_time as one that completely diverges. failure_rate is the cleaner
+    binary complement.
+
+  - Bootstrap CIs widen automatically in regions of high seed-disagreement, so
+    visually the figure reveals instability without a separate diagnostic.
+
+
+================================================================================
+6. Calibration pipeline (detailed)
+================================================================================
+
+    benchmark.test_set(n_test, seed=test_grid_seed)   ─ deterministic Sobol grid
+                                                        shared across seeds & methods
+    f_test = benchmark.f(X_test)                       ─ noiseless ground truth
+    ──────────────────────────────────────────────────────────────────────────────
+    For each method (RIGHT, WRONG):
+      For each snapshot at iteration % calibration_every == 0
+                          OR iteration == budget:
+
+        train_X, train_Y ← reconstruct from InitialDesign + trajectory[:iter-1]
+                           applying train_label transform
+        gp = builder.construct(train_X, train_Y)        # no MLL fit
+        load_state_dict_into(gp, snapshot.state_dict)
+        posterior = gp.posterior(X_test)
+        mean, std = posterior.mean, sqrt(posterior.variance + 1e-12)
+
+        y_true = f_test                if train_label == "y_obs"        (RIGHT)
+               = |f_test - T|          if train_label == "abs(y_obs-T)" (WRONG)
+
+        grid_summary        = calibration_summary(y_true, mean, std)
+        near_target_summary = near_target_calibration_summary(
+            f_true=f_test, mean=mean, std=std,
+            target=T, epsilon=near_target_epsilon)        # always against raw f
+        predictions         = (X_test, y_true, mean, std)
+
+        append CalibrationReport(iteration_index=iter, n_test, test_grid_seed,
+                                  test_grid=grid_summary, near_target=...,
+                                  predictions=...)
+
+
+--------------------------------------------------------------------------------
+Why this design
+--------------------------------------------------------------------------------
+
+  - HELD-OUT GRID, NOT TRAINING DATA: training-data calibration is trivially
+    good for a flexible GP and uninformative. A fixed Sobol grid covers the
+    search space uniformly.
+
+  - SHARED GRID ACROSS METHODS AND SEEDS: removes "lucky/unlucky test points"
+    as a confounder. The same X_test and same f_test are evaluated against
+    both RIGHT and WRONG, so any difference in calibration is attributable to
+    the GP, not the grid.
+
+  - RECONSTRUCTION BY load_state_dict, NOT REFITTING: GP fitting is
+    non-deterministic (LBFGS restarts, randomness in initial hyperparameters),
+    so refitting would replace the actual trained model with a near-cousin.
+    The pipeline's invariant is: THE GP ANALYSED OFFLINE IS BIT-IDENTICAL TO
+    THE GP THE BO LOOP USED.
+
+  - CHECKPOINT FREQUENCY (calibration_every): avoids the storage cost of
+    `budget` calibrations per seed while still allowing a temporal view of
+    calibration drift. The final iteration is always included.
+
+  - WHY GP-UCB CARES ABOUT CALIBRATION: the UCB acquisition μ + √β·σ is
+    theoretically grounded only when the posterior (μ, σ) is a VALID
+    credible region. If confidence_violation_rate ≫ 1 − level, the algorithm
+    is overconfident and may discard regions that actually contain the target.
+    NLPD penalises both bias and miscalibrated variance; coverage tracks the
+    latter directly.
+
+  - CONNECTION TO SEPARATION OF CONCERNS: for RIGHT, calibration is measured
+    on the NATURAL QUANTITY f. For WRONG, it is measured on the TRANSFORMED
+    QUANTITY |f − T|. So a WRONG GP that has a fold at T may still look
+    "calibrated" on its own transformed targets — but the near_target summary
+    (always against raw f near T) exposes whether that calibration translates
+    into a useful decision rule near the target. THIS IS EXACTLY THE SoC
+    ARGUMENT MADE EMPIRICALLY: even when WRONG's predictive distribution is
+    internally consistent, its decision-relevant region near the target is
+    what matters.
+
+
+================================================================================
+7. Scientific rationale of the pipeline
+================================================================================
+
+  - MULTIPLE SEEDS: necessary because BO is stochastic in three ways (initial
+    design scrambling, noise on observations, multi-start acquisition
+    optimisation). A claim that RIGHT outperforms WRONG must hold under the
+    joint distribution of these sources, not on one realisation.
+
+  - SHARED INITIAL DESIGN ACROSS METHODS WITHIN A SEED: same Sobol design
+    seeds RIGHT and WRONG identically. This isolates the comparison to WHAT
+    THE METHOD DOES WITH THE SAME STARTING INFORMATION, removing initial-luck
+    as a confounder. It is the paired-design property.
+
+  - SHARED NOISE REALISATIONS ACROSS METHODS WITHIN A SEED: in run.py,
+    torch.manual_seed(seed) is set once per seed before
+    problem.observe(X_init) and then again implicitly through the order in
+    which methods are run. Strictly speaking the noise draws inside the BO
+    loop are NOT paired across methods because RIGHT and WRONG query different
+    x_t and the noise is drawn fresh for each call to observe. So the
+    INITIAL-DESIGN noise is shared, but the BO-ITERATION noise is not.
+    (See Section 8.)
+
+  - PAIRED RIGHT vs WRONG COMPARISON: the per-seed structure makes the
+    comparison conditionally identifiable. Mann–Whitney is unpaired and
+    discards this structure — a Wilcoxon signed-rank test or a permutation
+    test on per-seed differences would be a natural strengthening.
+
+  - CALIBRATION CHECKPOINTS: separate predictive-quality drift from
+    optimisation success. A method that gets lucky early may show good final
+    regret with bad calibration (overconfident model that happened to be
+    right).
+
+  - HELD-OUT TEST SETS: independent of training/training-trajectory;
+    deterministic; method-agnostic.
+
+  - RAW/PROCESSED/AGGREGATE SEPARATION: enables three classes of operation
+    independently —
+      * re-running BO (most expensive),
+      * re-deriving metrics (cheap, deterministic),
+      * re-aggregating (very cheap).
+    It also means analyze.py can be re-run with different --statistic,
+    --confidence, --n-bootstrap without re-touching process.py, and process.py
+    can be re-run with different epsilon, failure_threshold,
+    near_target_epsilon, or test_grid without re-running BO.
+
+
+================================================================================
+8. Critical review of the current output structure
+================================================================================
+
+--------------------------------------------------------------------------------
+8.1 Redundancies and storage concerns
+--------------------------------------------------------------------------------
+
+  - `hyperparameters` inside each ModelSnapshot is fully derivable from the
+    state_dict. Currently it is recorded but not consumed by any downstream
+    stage. It is cheap (≈5 floats × budget) and useful for human eyeballing
+    in notebooks/, so keeping it is defensible — but be explicit that it is
+    DIAGNOSTIC REDUNDANCY, not load-bearing.
+
+  - `posterior_mean_at_candidate`, `posterior_std_at_candidate` in StepRecord
+    are also derivable from the snapshot at iteration t (which is captured
+    BEFORE the candidate is observed). They are useful for the run log and
+    may be useful for an acquisition-decomposition plot, but they could be
+    regenerated from snapshots on demand.
+
+  - `predictions` inside each CalibrationReport: stores
+    (X_test, y_true, mean, std) per checkpoint. With n_test=256 × 4 floats
+    × 10 checkpoints × 2 methods ≈ 20k floats per seed file. For Branin
+    (20 seeds), this is acceptable; for Hartmann-6 with n_test=2048 it grows
+    linearly. Two cleaner options:
+      (a) store X_test and y_true ONCE per benchmark under
+          processed/aggregate/<benchmark>/test_grid.json (they are method-
+          and seed-independent), and only mean, std per checkpoint;
+      (b) store predictions only for the FINAL checkpoint by default, with
+          a flag to enable per-checkpoint snapshots.
+
+  - `final_best_target_distance` and `final_target_simple_regret` are
+    IDENTICAL whenever oracle_best == 0 (target attainable). The aggregate
+    file then duplicates a column — visible in the example output where both
+    fields have identical summaries. Either
+      (i) drop one when oracle_best == 0, or
+      (ii) document in the paper that they coincide for attainable targets.
+
+  - `mann_whitney`'s embedded n_right, n_wrong, scipy_available duplicate the
+    same fields one level up in each comparison entry.
+
+
+--------------------------------------------------------------------------------
+8.2 Potentially missing quantities
+--------------------------------------------------------------------------------
+
+  - WALL-CLOCK TIMESTAMPS PER ITERATION are not recorded. run.py logs an
+    overall elapsed time but no per-iteration timing. For a paper on BO this
+    is fine; for cost-aware experiments (Exp E) this becomes essential.
+
+  - CUMULATIVE WALL-CLOCK AND GP-FIT TIME would distinguish "RIGHT is
+    statistically better" from "RIGHT is also cheaper", a fair worry given
+    the noise-inference overhead in WRONG.
+
+  - PER-ITERATION CALIBRATION TIME SERIES are recorded at the per-seed level
+    but the aggregate calibration file only consults the final checkpoint. A
+    calibration_curves.json analogous to convergence_curves.json (NLPD vs
+    iteration, with bootstrap CI) would directly support the claim "RIGHT's
+    calibration is good and stays good throughout the trajectory".
+
+  - WILCOXON SIGNED-RANK / PERMUTATION TESTS on per-seed differences are
+    absent. The paired structure of the experiment is currently
+    underexploited.
+
+  - MULTIPLE-COMPARISONS HANDLING: with ~8 metrics and possibly multiple
+    (RIGHT, WRONG) pairs, the paper should either pre-register one headline
+    metric or apply Holm/BH correction. Neither is currently recorded.
+
+  - PER-ITERATION NOISE VARIANCE ESTIMATE FOR WRONG — useful as a diagnostic
+    ("does the WRONG GP think the noise is non-uniform?"). It is in the
+    snapshot's hyperparameters but never surfaced.
+
+  - HITTING-TIME ON THE INITIAL DESIGN — the current hitting_time counts
+    iterations 1...n_evaluations, so if a Sobol point hits ε immediately,
+    hitting_time = 1 reflects a "BO-was-irrelevant" outcome. Useful but worth
+    mentioning in the paper.
+
+
+--------------------------------------------------------------------------------
+8.3 Ambiguities & interpretation risks
+--------------------------------------------------------------------------------
+
+  - `final_target_simple_regret` WHEN `oracle_best > 0`: the current code
+    only sets oracle_best > 0 if problem.oracle_target_distance(T) returns a
+    non-None value. For Branin or Hartmann with a target that lies outside
+    the function range, this would be silently zero unless the benchmark
+    explicitly overrides oracle_target_distance. Worth a runtime assertion
+    or a paper-side caveat.
+
+  - `hitting_time = n_evaluations + 1` WHEN NEVER HIT: averaging hitting
+    times across seeds where some hit and some don't is a CENSORED-DATA
+    problem. Mean/median of a censored sample is biased downward in
+    seeds-that-hit and upward in seeds-that-don't. Reporting failure_rate
+    alongside is the right safeguard, but the paper should mention this
+    explicitly. A Kaplan–Meier style survival curve would be ideal.
+
+  - `predictions.y_true` FOR WRONG = `|f - T|` — this is correct for
+    measuring how well the WRONG GP models its own quantity, but a reader
+    scanning calibration plots may not realise the y-axis differs between
+    methods. The plotting code needs to label this carefully.
+
+  - REPRODUCIBILITY UNDER NON-DETERMINISTIC CUDA: the metadata records the
+    Git commit but not the CUDA / cuDNN configuration. On GPU, GP fitting is
+    non-deterministic at the bit level. Since reconstruction uses
+    load_state_dict_into and not refitting, downstream calibration IS
+    reproducible; but a re-run of run.py on the same hardware will not
+    produce bit-identical raw files. This is acceptable for a paper, but
+    should be flagged.
+
+
+--------------------------------------------------------------------------------
+8.4 Where reproducibility could fail
+--------------------------------------------------------------------------------
+
+  - `metadata.json.command` in the example shows
+    ["smoke_test_exp_a_workflow.py"] — i.e. the run was launched via a
+    wrapper, not `python -m experiments.exp_a_target_matching.run`. If that
+    wrapper is uncommitted, the exact command is irrecoverable. Recommend
+    committing all entry-point scripts.
+
+  - `git_dirty: true` is already recorded in metadata but does not capture
+    the dirty diff. A metadata.json.diff (or a saved patch) would close that
+    gap. (Not necessarily worth it for every run — for the published paper,
+    run from a clean commit.)
+
+  - `config.json` records the YAML faithfully but does not record defaults
+    set elsewhere (e.g. calibration_every defaults to 5 inside process.py).
+    If process.py defaults ever change, old raw files will be re-processed
+    with different cadence silently. Pin every default explicitly in
+    config.json.
+
+  - THE TEST GRID SEED (test_grid.seed) is in config.json, which is good —
+    but process.py also reads config.get("test_grid", {}), so if the config
+    is missing the section, n_test=256, seed=0 are used silently. Make this
+    required.
+
+
+--------------------------------------------------------------------------------
+8.5 Where the pipeline could become unnecessarily heavy
+--------------------------------------------------------------------------------
+
+  - `state_dict` STORAGE PER ITERATION: with budget=50 and the snapshots
+    having ~15 tensors each, the raw seed JSON is dominated by snapshot
+    blobs. For Hartmann-6 with budget 200 and 30 seeds, this becomes the bulk
+    of disk usage. Two mitigations:
+      (a) drop snapshots at the iterations that won't be
+          calibration-checkpointed (you only need snapshots at
+          iter % every == 0 and the last one);
+      (b) use a binary container (.pt or compressed JSON) for snapshots
+          while keeping `trajectory` in JSON.
+    Option (a) is the cleaner one because it preserves the JSON contract.
+
+  - `predictions` FOR EVERY CALIBRATION CHECKPOINT as discussed in 8.1.
+
+  - `convergence_curves.json` PER BENCHMARK: at 5000 bootstrap × n_steps ×
+    n_seeds, the in-memory tensor is (5000, n_seeds, n_steps). For Hartmann-6
+    (budget=200, n_seeds=30) it is 30 M floats — fits comfortably, but worth
+    keeping in mind if you push to n_bootstrap=20000 or budget grows.
+
+  - AGGREGATION OF CALIBRATION TIME-SERIES is currently absent (analyze.py
+    uses only the final checkpoint). Adding it doubles the calibration
+    aggregate file but is the natural next step.
+
+
+--------------------------------------------------------------------------------
+8.6 Suggested minimal hardening before the paper run
+--------------------------------------------------------------------------------
+
+  1. Make oracle_best either explicitly required to be > 0 or document its
+     zero-default in config.json.
+  2. Surface a paper-level headline_metric field in config.json so analyse /
+     figures know which to feature.
+  3. Add a Wilcoxon signed-rank test (or permutation test on differences)
+     alongside Mann–Whitney to exploit the paired structure.
+  4. Decide on a multiple-comparisons rule and apply it in
+     statistical_tests.json.
+  5. Either move X_test / y_true to a per-benchmark file or restrict
+     per-checkpoint predictions to the final iteration by default.
+  6. Record per-iteration wall-clock time, even if you never report it — it
+     costs nothing and pre-empts cost-aware experiments.
+  7. Pin calibration_every explicitly in the YAML so it's never silently
+     inherited from a Python default.
+
+
+================================================================================
+TL;DR map (one-screen view)
+================================================================================
+
+    config.yaml ──► run.py ──► raw/<bench>/seed_NNN.json
+                                  │   ├── metadata
+                                  │   ├── initial_design
+                                  │   │     (Sobol + obs, shared by all methods)
+                                  │   └── methods : { RIGHT, WRONG } each with
+                                  │         ├── trajectory
+                                  │         │     (one StepRecord per BO iter)
+                                  │         └── model_snapshots
+                                  │               (one fitted GP / iter)
+                                  │
+                                  ▼   (per seed, deterministic, no refitting)
+    config + raw ──► process.py ──► processed/per_seed/<bench>/seed_NNN_processed.json
+                                      ├── metadata copy + oracle_best + test_grid spec
+                                      └── methods : { RIGHT, WRONG } each with
+                                            ├── final
+                                            │     (12 scalar metrics)
+                                            ├── convergence
+                                            │     (4 time series of length N+budget)
+                                            └── calibrations[]
+                                                  (≈10 checkpoints,
+                                                   NLPD/cov/PIT/violation
+                                                   + near-target
+                                                   + per-point grid)
+                                      │
+                                      ▼   (across seeds, only stage that mixes seeds)
+    list of per-seed ──► analyze.py ──► processed/aggregate/<bench>/
+                                        ├── final_performance.json
+                                        │     (summarize_sample per scalar/method)
+                                        ├── convergence_curves.json
+                                        │     (median + 95% bootstrap CI / curve / method)
+                                        ├── calibration_summary.json
+                                        │     (summarize_sample on FINAL checkpoint)
+                                        └── statistical_tests.json
+                                              (MW + rank-biserial + Cohen's d
+                                               per RIGHT×WRONG pair, per scalar)
+
+Everything to the right of raw/ is recomputable from raw + config in seconds;
+the expensive object (raw) is the only one that requires re-running BO to
+regenerate.
+
+================================================================================
+End of document
+================================================================================

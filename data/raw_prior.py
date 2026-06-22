@@ -24,7 +24,8 @@ Canonical JSON structure::
 Additional raw information stored relative to Experiment A:
 
 - the prior configuration (center, lengthscale, label) in the metadata;
-- the normalization parameters (f_min, f_max, direction) in the metadata;
+- the orientation parameters (raw f_min, f_max, direction, and the derived
+  oriented range / f_opt) in the metadata;
 - ``prior_value_at_candidate`` per BO step;
 - ``lambda_value`` per BO step (the fitted ``lambda`` of the prior-mean GP
   used to select that candidate; ``None`` for standard-GP methods) — the
@@ -59,8 +60,9 @@ class PriorStepRecord:
     Attributes:
         iteration: 1-based index within the BO budget.
         x: Query point as ``list[float]`` (length ``dim``).
-        y_obs: Noisy observation (normalized scale).
-        f_noiseless: True normalized benchmark value; ``None`` for real data.
+        y_obs: Noisy observation of the oriented objective (raw scale).
+        f_noiseless: True oriented benchmark value ``g(x)`` (raw scale);
+            ``None`` for real data.
         acq_value: Acquisition value at the selected candidate.
         train_size: GP training-set size before this query.
         posterior_mean_at_candidate: GP posterior mean at ``x`` before the
@@ -184,20 +186,22 @@ class PriorSeedMetadata:
     Attributes:
         experiment: ``"exp_b_prior_guided"``.
         problem_type: ``"synthetic"`` or ``"real_data"``.
-        benchmark: Normalized problem name, e.g. ``"forrester_1d_normalized"``.
+        benchmark: Oriented problem name (same as the raw benchmark name,
+            e.g. ``"forrester_1d"`` — no ``_normalized`` suffix).
         base_benchmark: Wrapped benchmark name, e.g. ``"forrester_1d"``.
         seed: Random seed for the Sobol design and BO trajectory.
         budget: Number of BO iterations (excluding the initial design).
         initial_design_size: Number of Sobol initial design points.
-        noise_std: Observation noise std on the normalized scale.
+        noise_std: Observation noise std on the raw oriented scale.
         dim: Input dimension.
         bounds: Box bounds, ``[[lb_1, ..., lb_d], [ub_1, ..., ub_d]]``.
-        normalization: ``{"f_min", "f_max", "direction"}`` actually used,
-            so reconstruction is independent of later default changes.
+        orientation: ``{"f_min", "f_max", "direction", "f_lower", "f_upper",
+            "f_opt"}`` actually used (raw inner extrema + derived oriented
+            range), so reconstruction is independent of later default changes.
         prior: Prior configuration ``{"center", "lengthscale"}`` plus an
             optional descriptive ``"label"`` (e.g. ``"good"`` / ``"bad"``).
-        f_opt_normalized: Oracle maximum of the normalized objective
-            (``1.0`` by construction for exact extremal values).
+        f_opt: Oracle maximum of the oriented objective ``g`` on the raw
+            scale (``-min f_raw`` for a minimization benchmark).
         alpha: Prior-strength weight used by ``alpha_pi_ucb``.
         beta: UCB exploration parameter shared by all methods.
     """
@@ -212,9 +216,9 @@ class PriorSeedMetadata:
     noise_std: float
     dim: int
     bounds: Optional[list[list[float]]] = None
-    normalization: Optional[dict[str, Any]] = None
+    orientation: Optional[dict[str, Any]] = None
     prior: Optional[dict[str, Any]] = None
-    f_opt_normalized: float = 1.0
+    f_opt: float = 0.0
     alpha: Optional[float] = None
     beta: Optional[float] = None
 

@@ -293,6 +293,7 @@ class DampedOscillatoryTrap1D(SyntheticBenchmark):
 
         oscillation = a * torch.exp(-decay * x) * torch.sin(two_pi * freq * x)
         return x + oscillation
+    
 class DoubleGaussianWell1D(SyntheticBenchmark):
     """One-dimensional bimodal benchmark with two Gaussian wells of
     different depths (prior-guided BO trap).

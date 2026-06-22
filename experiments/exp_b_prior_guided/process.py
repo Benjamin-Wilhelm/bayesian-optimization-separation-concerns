@@ -1,7 +1,8 @@
 """Experiment B — per-seed processing.
 
 Loads one raw seed JSON (:mod:`data.raw_prior`), computes standard BO
-metrics under the maximization convention on normalized outputs, and writes
+metrics under the maximization convention on the raw oriented objective
+(:class:`benchmarks.oriented.OrientedBenchmark`, no [0, 1] rescaling), and writes
 a :class:`~data.processed_prior.ProcessedPriorSeedData` file.  No BO is
 rerun; no GP is refit.  GP posteriors needed for calibration are obtained by
 
@@ -11,7 +12,7 @@ rerun; no GP is refit.  GP posteriors needed for calibration are obtained by
    :func:`experiments.exp_b_prior_guided.run.make_model_builder`,
 3. loading the snapshot's serialized ``state_dict``.
 
-Calibration is always evaluated on the objective ``f`` (normalized
+Calibration is always evaluated on the objective ``f`` (raw oriented
 noiseless values), for every method.  In addition to the global held-out
 grid, a **prior-region** summary is computed on
 ``{x : pi(x) >= prior_region_threshold}`` to study overconfidence near the
@@ -38,7 +39,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from benchmarks.normalized import NormalizedBenchmark, build_normalized_benchmark
+from benchmarks.oriented import OrientedBenchmark, build_oriented_benchmark
 from common.diagnostics import build_calibration_report_dict
 from common.logging import RunLogger
 from common.metrics import (
@@ -101,7 +102,7 @@ def _rebuild_gp_at_snapshot(
     snapshot: ModelSnapshot,
     method: PriorMethodTrajectory,
     config: dict[str, Any],
-    problem: NormalizedBenchmark,
+    problem: OrientedBenchmark,
     prior: GaussianPrior,
     train_X: torch.Tensor,
     train_Y: torch.Tensor,
@@ -247,7 +248,7 @@ def _calibration_reports(
     method: PriorMethodTrajectory,
     initial_design: InitialDesign,
     config: dict[str, Any],
-    problem: NormalizedBenchmark,
+    problem: OrientedBenchmark,
     prior: GaussianPrior,
     X_global: torch.Tensor,
     f_global: torch.Tensor,
@@ -340,10 +341,10 @@ def _reconstruction_config(
     config: dict[str, Any],
     raw: RawPriorSeedData,
 ) -> dict[str, Any]:
-    """Top-level config snapshot for :func:`build_normalized_benchmark`.
+    """Top-level config snapshot for :func:`build_oriented_benchmark`.
 
     Overrides the persisted YAML config with the bounds, noise_std, and
-    normalization parameters actually recorded at run time, so the
+    orientation parameters actually recorded at run time, so the
     reconstruction is independent of any later edit to defaults.
     """
     reco = dict(config)
@@ -356,8 +357,8 @@ def _reconstruction_config(
         bench_cfg["bounds"] = raw.metadata.bounds
     reco["benchmark"] = bench_cfg
     reco["noise_std"] = raw.metadata.noise_std
-    if raw.metadata.normalization is not None:
-        reco["normalization"] = dict(raw.metadata.normalization)
+    if raw.metadata.orientation is not None:
+        reco["orientation"] = dict(raw.metadata.orientation)
     return reco
 
 
@@ -366,7 +367,7 @@ def _process_one_seed(
     config: dict[str, Any],
     device: torch.device,
 ) -> ProcessedPriorSeedData:
-    problem = build_normalized_benchmark(_reconstruction_config(config, raw))
+    problem = build_oriented_benchmark(_reconstruction_config(config, raw))
     if problem.name != raw.metadata.benchmark:
         raise ValueError(
             f"Reconstructed benchmark '{problem.name}' does not match raw "
@@ -376,7 +377,7 @@ def _process_one_seed(
         raise ValueError("Raw metadata lacks the prior configuration.")
     prior = GaussianPrior.from_config(raw.metadata.prior, dim=problem.dim)
 
-    f_opt = float(raw.metadata.f_opt_normalized)
+    f_opt = float(raw.metadata.f_opt)
     epsilon = config.get("epsilon")
     beta = float(raw.metadata.beta if raw.metadata.beta is not None
                  else config.get("beta", 2.0))
@@ -487,6 +488,91 @@ def _process_one_seed(
 
 
 # ---------------------------------------------------------------------------
+# Regret debug / verification
+# ---------------------------------------------------------------------------
+
+def recompute_regret_from_raw(
+    raw: RawPriorSeedData,
+    problem: OrientedBenchmark,
+    f_opt: float,
+) -> dict[str, dict[str, torch.Tensor]]:
+    """Recompute the regret directly from the raw queries.
+
+    For each method, re-evaluate the **oriented** benchmark ``f`` on the
+    initial design and on every BO query, then form the maximization regret
+    from scratch::
+
+        f(x_t)               = problem.f(x_t)            # raw oriented value
+        instantaneous_regret = f_opt - f(x_t)
+        simple_regret        = f_opt - max_{s <= t} f(x_s)
+
+    This is intentionally independent of the stored ``f_noiseless`` and of the
+    processed JSON, so a mismatch pinpoints a raw/oriented confusion, a
+    sign/min-max confusion, or an initial-design/BO concatenation offset.
+
+    Returns a dict ``{method: {"f", "instantaneous_regret", "simple_regret"}}``
+    of 1-D ``torch.double`` tensors over the full evaluation history.
+    """
+    init_X = torch.tensor(raw.initial_design.X, dtype=torch.double)
+    init_f = problem.f(init_X).squeeze(-1)
+
+    out: dict[str, dict[str, torch.Tensor]] = {}
+    for name, method in raw.methods.items():
+        if method.trajectory:
+            Xq = torch.tensor([s.x for s in method.trajectory], dtype=torch.double)
+            f_bo = problem.f(Xq).squeeze(-1)
+        else:
+            f_bo = torch.empty(0, dtype=torch.double)
+        f_all = torch.cat([init_f, f_bo])
+        out[name] = {
+            "f": f_all,
+            "instantaneous_regret": float(f_opt) - f_all,
+            "simple_regret": float(f_opt) - torch.cummax(f_all, dim=0).values,
+        }
+    return out
+
+
+def verify_seed_consistency(
+    raw: RawPriorSeedData,
+    processed: ProcessedPriorSeedData,
+    problem: OrientedBenchmark,
+    f_opt: float,
+    atol: float = 1e-6,
+) -> list[tuple[str, float, float, float]]:
+    """Cross-check stored vs recomputed regret for one seed.
+
+    Compares, per method, the from-scratch recomputation
+    (:func:`recompute_regret_from_raw`) against (a) the stored
+    ``f_noiseless`` and (b) the processed convergence curves.  Returns the
+    list of ``(method, max|df|, max|d_inst|, max|d_simple|)`` tuples that
+    exceed ``atol`` (empty when everything is consistent).
+    """
+    recompute = recompute_regret_from_raw(raw, problem, f_opt)
+    problems: list[tuple[str, float, float, float]] = []
+    for name, rec in recompute.items():
+        method = raw.methods[name]
+        if method.trajectory:
+            Xq = torch.tensor([s.x for s in method.trajectory], dtype=torch.double)
+            recomputed_bo_f = problem.f(Xq).squeeze(-1)
+            stored_f = torch.tensor(
+                [s.f_noiseless for s in method.trajectory], dtype=torch.double
+            )
+            d_f = float((recomputed_bo_f - stored_f).abs().max().item())
+        else:
+            d_f = 0.0
+
+        conv = processed.methods[name].convergence
+        proc_inst = torch.tensor(conv.instantaneous_regret, dtype=torch.double)
+        proc_sr = torch.tensor(conv.simple_regret, dtype=torch.double)
+        d_inst = float((rec["instantaneous_regret"] - proc_inst).abs().max().item())
+        d_sr = float((rec["simple_regret"] - proc_sr).abs().max().item())
+
+        if max(d_f, d_inst, d_sr) > atol:
+            problems.append((name, d_f, d_inst, d_sr))
+    return problems
+
+
+# ---------------------------------------------------------------------------
 # Run-dir orchestration
 # ---------------------------------------------------------------------------
 
@@ -522,6 +608,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--device", type=str, default=None,
                         help="Torch device for GP reconstruction.  Falls back "
                              "to config['device'] or 'cpu'.")
+    parser.add_argument("--verify", action="store_true",
+                        help="After processing each seed, recompute the regret "
+                             "directly from the raw queries (re-evaluating the "
+                             "oriented benchmark) and assert it matches the "
+                             "stored f_noiseless and the processed curves.")
     return parser.parse_args(argv)
 
 
@@ -559,12 +650,37 @@ def main(argv: Optional[list[str]] = None) -> None:
         return
 
     logger.info(f"Processing {len(seed_files)} raw seed file(s) under {run_dir}")
+    n_verify_fail = 0
     for benchmark, seed, raw_path in seed_files:
         raw = RawPriorSeedData.from_dict(load_json(raw_path))
         processed = _process_one_seed(raw, config, device)
         out_path = run_logger.processed_per_seed_path(benchmark, seed)
         save_json(processed.to_dict(), out_path)
         logger.info(f"  [{benchmark}] seed {seed:>3} -> {out_path.relative_to(run_dir)}")
+
+        if args.verify:
+            problem = build_oriented_benchmark(_reconstruction_config(config, raw))
+            problems = verify_seed_consistency(
+                raw, processed, problem, float(raw.metadata.f_opt)
+            )
+            if problems:
+                n_verify_fail += 1
+                for name, d_f, d_inst, d_sr in problems:
+                    logger.error(
+                        "  [verify] %s seed %s method '%s': max|df|=%.2e "
+                        "max|d_inst|=%.2e max|d_simple|=%.2e",
+                        benchmark, seed, name, d_f, d_inst, d_sr,
+                    )
+            else:
+                logger.info(f"  [verify] {benchmark} seed {seed:>3}: regret consistent")
+
+    if args.verify:
+        if n_verify_fail:
+            raise SystemExit(
+                f"Regret verification FAILED for {n_verify_fail} seed file(s); "
+                "see the [verify] errors above."
+            )
+        logger.info("Regret verification passed for all processed seeds.")
 
 
 if __name__ == "__main__":
