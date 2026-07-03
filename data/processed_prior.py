@@ -125,6 +125,9 @@ class PriorConvergenceCurves:
         bo_iteration: 1..budget.
         prior_value_at_candidate: ``pi(x_t)`` per BO iteration.
         lambda_per_iteration: Fitted ``lambda`` per BO iteration, or ``None``.
+        beta_per_iteration: UCB exploration parameter ``beta_t`` per BO
+            iteration, or ``None`` for legacy runs.  Constant for a scalar
+            ``beta``; increasing for a ``log`` / ``matern_gamma`` schedule.
     """
 
     iteration:                list[int]
@@ -136,6 +139,7 @@ class PriorConvergenceCurves:
     bo_iteration:             list[int]
     prior_value_at_candidate: list[float]
     lambda_per_iteration:     Optional[list[float]]
+    beta_per_iteration:       Optional[list[float]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)

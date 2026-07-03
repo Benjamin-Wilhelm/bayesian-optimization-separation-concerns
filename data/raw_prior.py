@@ -72,6 +72,9 @@ class PriorStepRecord:
             (native-domain prior).
         lambda_value: Fitted ``lambda`` of the prior-mean GP used at this
             iteration; ``None`` for methods with a standard GP.
+        beta_value: UCB exploration parameter ``beta_t`` used to select this
+            candidate.  ``None`` for legacy records; for a constant ``beta``
+            run it equals the scalar ``beta`` at every iteration.
     """
 
     iteration: int
@@ -84,6 +87,7 @@ class PriorStepRecord:
     posterior_std_at_candidate: float
     prior_value_at_candidate: float
     lambda_value: Optional[float]
+    beta_value: Optional[float] = None
 
     @classmethod
     def from_tensors(
@@ -98,6 +102,7 @@ class PriorStepRecord:
         posterior_std: float,
         prior_value: float,
         lambda_value: Optional[float],
+        beta_value: Optional[float] = None,
     ) -> "PriorStepRecord":
         """Construct from raw tensors; converts everything to plain Python."""
         f: Optional[float] = f_val.squeeze().item() if f_val is not None else None
@@ -114,6 +119,7 @@ class PriorStepRecord:
             lambda_value=(
                 float(lambda_value) if lambda_value is not None else None
             ),
+            beta_value=(float(beta_value) if beta_value is not None else None),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -203,7 +209,11 @@ class PriorSeedMetadata:
         f_opt: Oracle maximum of the oriented objective ``g`` on the raw
             scale (``-min f_raw`` for a minimization benchmark).
         alpha: Prior-strength weight used by ``alpha_pi_ucb``.
-        beta: UCB exploration parameter shared by all methods.
+        beta: Representative UCB exploration parameter shared by all methods
+            (``beta_t`` at ``t = 1`` for a schedule; the constant value
+            otherwise).
+        beta_schedule: Config-shaped ``BetaSchedule`` dict actually used
+            (``{"type", ...}``), or ``None`` for a plain constant / legacy run.
     """
 
     experiment: str
@@ -221,6 +231,7 @@ class PriorSeedMetadata:
     f_opt: float = 0.0
     alpha: Optional[float] = None
     beta: Optional[float] = None
+    beta_schedule: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)

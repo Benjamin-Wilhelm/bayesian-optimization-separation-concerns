@@ -62,6 +62,10 @@ class StepRecord:
         posterior_mean_at_candidate: GP posterior mean at ``x``, evaluated
             before the candidate was added to the training set.
         posterior_std_at_candidate: GP posterior standard deviation at ``x``.
+        beta_value: UCB exploration parameter ``beta_t`` used to select this
+            candidate.  ``None`` for legacy records written before the beta
+            schedule was introduced (constant ``beta`` runs are unaffected:
+            ``beta_t`` then equals the scalar ``beta``).
     """
 
     iteration: int
@@ -72,6 +76,7 @@ class StepRecord:
     train_size: int
     posterior_mean_at_candidate: float
     posterior_std_at_candidate: float
+    beta_value: Optional[float] = None
 
     @classmethod
     def from_tensors(
@@ -84,6 +89,7 @@ class StepRecord:
         train_size: int,
         posterior_mean: float,
         posterior_std: float,
+        beta_value: Optional[float] = None,
     ) -> "StepRecord":
         """Construct from raw tensors; converts everything to plain Python."""
         f: Optional[float] = f_val.squeeze().item() if f_val is not None else None
@@ -96,6 +102,7 @@ class StepRecord:
             train_size=train_size,
             posterior_mean_at_candidate=posterior_mean,
             posterior_std_at_candidate=posterior_std,
+            beta_value=(float(beta_value) if beta_value is not None else None),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -263,6 +270,11 @@ class SeedMetadata:
         noise_std: Observation noise standard deviation.
         dim: Input dimension.
         bounds: Box bounds, ``[[lb_1, ..., lb_d], [ub_1, ..., ub_d]]``.
+        beta: Representative UCB exploration parameter (``beta_t`` at ``t = 1``
+            for a schedule; the constant value otherwise).  ``None`` for
+            legacy metadata.
+        beta_schedule: Config-shaped ``BetaSchedule`` dict actually used
+            (``{"type", ...}``), or ``None`` for a plain constant / legacy run.
     """
 
     experiment: str
@@ -275,6 +287,8 @@ class SeedMetadata:
     noise_std: float
     dim: int
     bounds: Optional[list[list[float]]] = None
+    beta: Optional[float] = None
+    beta_schedule: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)

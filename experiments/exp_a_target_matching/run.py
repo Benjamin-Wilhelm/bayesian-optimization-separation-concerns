@@ -37,6 +37,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from acquisitions.target_matching import TargetMatchingUCB, WrongTargetMatchingUCB
 from benchmarks import BENCHMARK_REGISTRY, SyntheticBenchmark, build_benchmark
+from common.acquisition_utils import BetaSchedule
 from common.initial_design import sobol_design
 from common.logging import RunLogger
 from common.models import GPModelBuilder, GPModelConfig, serialize_state_dict
@@ -135,7 +136,7 @@ def _run_one_method(
     spec = _METHOD_SPECS[method_name]
 
     target = float(config["target"])
-    beta = float(config["beta"])
+    beta_schedule = BetaSchedule.from_config(config)
     budget = int(config["budget"])
     num_restarts = int(config["num_restarts"])
     raw_samples = int(config["raw_samples"])
@@ -159,7 +160,8 @@ def _run_one_method(
         model = builder.fit(X, Y_train)
         snapshots.append(_capture_snapshot(builder, model, iteration))
 
-        acq = spec["acq_builder"](model, target, beta)
+        beta_t = beta_schedule.beta_at(iteration, problem.dim)
+        acq = spec["acq_builder"](model, target, beta_t)
         cand, acq_val = optimize_acqf(
             acq_function=acq,
             bounds=problem.bounds.to(device),
@@ -184,6 +186,7 @@ def _run_one_method(
             train_size=X.shape[0],
             posterior_mean=post_mean,
             posterior_std=post_std,
+            beta_value=beta_t,
         ))
 
         X = torch.cat([X, cand],            dim=0)
@@ -193,7 +196,8 @@ def _run_one_method(
             f"    [{method_name:<28}] iter={iteration:>3}  "
             f"acq={acq_val.item():>9.4f}  "
             f"f={obs.f_noiseless.squeeze().item():>8.4f}  "
-            f"|f-T|={abs(obs.f_noiseless.squeeze().item() - target):.4f}"
+            f"|f-T|={abs(obs.f_noiseless.squeeze().item() - target):.4f}  "
+            f"beta={beta_t:.3f}"
         )
 
     return MethodTrajectory(
@@ -248,6 +252,7 @@ def _run_one_seed(
             device=device,
         )
 
+    beta_schedule = BetaSchedule.from_config(config)
     metadata = SeedMetadata(
         experiment=config["experiment"],
         problem_type=problem.problem_type,
@@ -259,6 +264,8 @@ def _run_one_seed(
         noise_std=noise_std,
         dim=problem.dim,
         bounds=problem.bounds.tolist(),
+        beta=float(beta_schedule.beta_at(1, problem.dim)),
+        beta_schedule=beta_schedule.to_dict(),
     )
     return RawSeedData(
         metadata=metadata,
@@ -321,6 +328,7 @@ def main(argv: Optional[list[str]] = None) -> Path:
     )
     log = logger.setup_file_logger("run")
 
+    beta_schedule = BetaSchedule.from_config(config)
     logger.save_config(config)
     logger.save_metadata(extra={
         "experiment": config["experiment"],
@@ -332,6 +340,8 @@ def main(argv: Optional[list[str]] = None) -> Path:
         "noise_std":  float(problem.default_noise_std or 0.0),
         "methods":    list(config["methods"]),
         "bounds":     problem.bounds.detach().cpu().tolist(),
+        "beta":       float(beta_schedule.beta_at(1, problem.dim)),
+        "beta_schedule": beta_schedule.to_dict(),
     })
 
     log.info("=" * 60)
