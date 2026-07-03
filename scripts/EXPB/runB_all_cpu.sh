@@ -22,12 +22,12 @@ mkdir -p "$LOG_DIR"
 #Uncomment the config of which you wanna create data
 CONFIGS=(
   
-  "branin_2d_bad_prior.yaml"
-  "branin_2d_good_prior.yaml"
+  #"branin_2d_bad_prior.yaml"
+  #"branin_2d_good_prior.yaml"
   "double_well_1d_good_prior.yaml"
-  "double_well_1d_bad_prior.yaml"
-  "hartmann_6d_bad_prior.yaml"
-  "hartmann_6d_good_prior.yaml"
+  #"double_well_1d_bad_prior.yaml"
+  #"hartmann_6d_bad_prior.yaml"
+  #"hartmann_6d_good_prior.yaml"
   "forrester_1d_bad_prior.yaml"
   "forrester_1d_good_prior.yaml"
   #"sanity_double_well_1d.yaml"
