@@ -48,8 +48,9 @@ mapfile -t matches < <(
     -maxdepth 1 \
     -type d \
     \( \
-      -name "*double_well_1d_bad_prior" \
-      -o -name "*double_well_1d_good_prior" \
+      -name "*double_well_1d_bad_prior*" \
+      -o -name "*double_well_1d_good_prior*" \
+      -o -name "*double_well_1d_medium_prior*" \
       -o -name "*branin_2d_bad_prior" \
       -o -name "*branin_2d_good_prior" \
       -o -name "*hartmann_6d_bad_prior" \

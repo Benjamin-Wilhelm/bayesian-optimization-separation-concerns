@@ -8,7 +8,7 @@ export NUMEXPR_NUM_THREADS=1
 
 CONFIG_DIR="experiments/exp_b_prior_guided/configs"
 LOG_DIR="logsB_cpu_runs"
-MAX_PARALLEL=2
+MAX_PARALLEL=8
 
 PYTHON="python"
 if [[ -x ".venv/bin/python" ]]; then
@@ -19,17 +19,18 @@ fi
 
 mkdir -p "$LOG_DIR"
 
+#Uncomment the config of which you wanna create data
 CONFIGS=(
   
   "branin_2d_bad_prior.yaml"
   "branin_2d_good_prior.yaml"
   "double_well_1d_good_prior.yaml"
   "double_well_1d_bad_prior.yaml"
-  "hartmann_3d_bad_prior.yaml"
-  "hartmann_3d_good_prior.yaml"
+  "hartmann_6d_bad_prior.yaml"
+  "hartmann_6d_good_prior.yaml"
   "forrester_1d_bad_prior.yaml"
   "forrester_1d_good_prior.yaml"
-  "sanity_double_well_1d.yaml"
+  #"sanity_double_well_1d.yaml"
 )
 
 run_one() {
