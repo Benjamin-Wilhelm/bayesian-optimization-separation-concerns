@@ -61,6 +61,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from acquisitions.prior_guided import AlphaPiUCB, LambdaPriorUCB, VanillaUCB
 from benchmarks.oriented import OrientedBenchmark, build_oriented_benchmark
+from common.acquisition_utils import BetaSchedule
 from common.initial_design import sobol_design
 from common.logging import RunLogger
 from common.models import GPModelConfig, serialize_state_dict
@@ -248,7 +249,7 @@ def _run_one_method(
     spec = _METHOD_SPECS[method_name]
 
     alpha = float(config.get("alpha", 0.5))
-    beta = float(config["beta"])
+    beta_schedule = BetaSchedule.from_config(config)
     budget = int(config["budget"])
     num_restarts = int(config["num_restarts"])
     raw_samples = int(config["raw_samples"])
@@ -270,7 +271,8 @@ def _run_one_method(
         if isinstance(model.mean_module, PriorMeanModule):
             lambda_value = model.mean_module.lambda_value
 
-        acq = spec["acq_builder"](model, prior, alpha, beta)
+        beta_t = beta_schedule.beta_at(iteration, problem.dim)
+        acq = spec["acq_builder"](model, prior, alpha, beta_t)
         cand, acq_val = optimize_acqf(
             acq_function=acq,
             bounds=problem.bounds.to(device),
@@ -298,6 +300,7 @@ def _run_one_method(
             posterior_std=post_std,
             prior_value=prior_value,
             lambda_value=lambda_value,
+            beta_value=beta_t,
         ))
 
         X = torch.cat([X, cand], dim=0)
@@ -308,7 +311,7 @@ def _run_one_method(
             f"    [{method_name:<24}] iter={iteration:>3}  "
             f"acq={acq_val.item():>9.4f}  "
             f"f={obs.f_noiseless.squeeze().item():>7.4f}  "
-            f"pi={prior_value:.4f}{lam_str}"
+            f"pi={prior_value:.4f}  beta={beta_t:.3f}{lam_str}"
         )
 
     return PriorMethodTrajectory(
@@ -370,6 +373,8 @@ def _run_one_seed(
     if isinstance(prior_cfg, dict) and prior_cfg.get("label") is not None:
         prior_meta["label"] = str(prior_cfg["label"])
 
+    beta_schedule = BetaSchedule.from_config(config)
+
     metadata = PriorSeedMetadata(
         experiment=config["experiment"],
         problem_type=problem.problem_type,
@@ -392,7 +397,8 @@ def _run_one_seed(
         prior=prior_meta,
         f_opt=float(problem.f_opt),
         alpha=float(config.get("alpha", 0.5)),
-        beta=float(config["beta"]),
+        beta=float(beta_schedule.beta_at(1, problem.dim)),
+        beta_schedule=beta_schedule.to_dict(),
     )
     return RawPriorSeedData(
         metadata=metadata,
@@ -448,6 +454,7 @@ def main(argv: Optional[list[str]] = None) -> Path:
 
     problem = build_oriented_benchmark(config)
     prior = GaussianPrior.from_config(config["prior"], dim=problem.dim)
+    beta_schedule = BetaSchedule.from_config(config)
 
     tag = args.tag or config.get("tag")
     logger = RunLogger.create(
@@ -470,7 +477,8 @@ def main(argv: Optional[list[str]] = None) -> Path:
         "bounds":         problem.bounds.detach().cpu().tolist(),
         "prior":          prior.to_dict(),
         "alpha":          float(config.get("alpha", 0.5)),
-        "beta":           float(config["beta"]),
+        "beta":           float(beta_schedule.beta_at(1, problem.dim)),
+        "beta_schedule":  beta_schedule.to_dict(),
         "f_opt":          float(problem.f_opt),
         "orientation": {
             "f_min": problem.f_min,
@@ -488,7 +496,7 @@ def main(argv: Optional[list[str]] = None) -> Path:
     log.info(f"  benchmark = {problem.name}  dim={problem.dim}")
     log.info(f"  bounds    = {problem.bounds.detach().cpu().tolist()}")
     log.info(f"  prior     = {prior}  (label={config.get('prior', {}).get('label')})")
-    log.info(f"  alpha     = {config.get('alpha', 0.5)}  beta = {config['beta']}")
+    log.info(f"  alpha     = {config.get('alpha', 0.5)}  beta = {beta_schedule!r}")
     log.info(f"  f_opt     = {problem.f_opt:.4f}  (oriented, raw scale; direction={problem.direction})")
     log.info(f"  noise_std = {problem.default_noise_std}  (raw oriented scale)")
     log.info(f"  n_initial = {config['initial_design_size']}  budget = {config['budget']}")

@@ -40,6 +40,7 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from benchmarks.oriented import OrientedBenchmark, build_oriented_benchmark
+from common.acquisition_utils import BetaSchedule
 from common.diagnostics import build_calibration_report_dict
 from common.logging import RunLogger
 from common.metrics import (
@@ -205,6 +206,9 @@ def _convergence_curves(
     lambda_values = [s.lambda_value for s in method.trajectory]
     has_lambda = any(v is not None for v in lambda_values)
 
+    beta_values = [getattr(s, "beta_value", None) for s in method.trajectory]
+    has_beta = any(v is not None for v in beta_values)
+
     return PriorConvergenceCurves(
         iteration=list(range(1, n + 1)),
         instantaneous_regret=inst.tolist(),
@@ -217,6 +221,9 @@ def _convergence_curves(
         ],
         lambda_per_iteration=(
             [float(v) for v in lambda_values] if has_lambda else None
+        ),
+        beta_per_iteration=(
+            [float(v) for v in beta_values] if has_beta else None
         ),
     )
 
@@ -264,7 +271,7 @@ def _calibration_reports(
     m_test_joint_distrib: Optional[int] = None,
     m_test_joint_prior_region: Optional[int] = None,
     joint_nlpd_jitter: float = 1e-6,
-    beta: float = 2.0,
+    beta_schedule: Optional[BetaSchedule] = None,
 ) -> list[PriorCalibrationReport]:
     """Held-out calibration at selected GP snapshots.
 
@@ -274,7 +281,14 @@ def _calibration_reports(
     near-grid slot of that helper is fed with the **prior-region** subset
     ``{x : pi(x) >= threshold}`` of the global grid; ground truth is always
     the normalized noiseless objective ``f``.
+
+    ``beta_schedule`` sets the confidence-bound level used by the
+    violation-rate diagnostic; it is evaluated per snapshot iteration so the
+    bands match the ``beta_t`` actually used to select candidates.  Defaults
+    to a constant ``beta = 2.0`` when omitted.
     """
+    if beta_schedule is None:
+        beta_schedule = BetaSchedule("constant", {"value": 2.0})
     if not method.model_snapshots:
         raise ValueError(f"No model snapshots for method '{method.method_name}'.")
 
@@ -294,6 +308,7 @@ def _calibration_reports(
             snapshot, method, config, problem, prior, train_X, train_Y
         )
 
+        beta = beta_schedule.beta_at(snapshot.iteration, problem.dim)
         artifacts = build_calibration_report_dict(
             model=model,
             X_global=X_global,
@@ -379,8 +394,17 @@ def _process_one_seed(
 
     f_opt = float(raw.metadata.f_opt)
     epsilon = config.get("epsilon")
-    beta = float(raw.metadata.beta if raw.metadata.beta is not None
-                 else config.get("beta", 2.0))
+    # Reconstruct the exact beta schedule used at run time: prefer the schedule
+    # stored in the raw metadata, then the run config, then a constant fallback
+    # from the legacy scalar beta.
+    if raw.metadata.beta_schedule is not None:
+        beta_schedule = BetaSchedule.from_schedule_dict(raw.metadata.beta_schedule)
+    elif config.get("beta_schedule") is not None:
+        beta_schedule = BetaSchedule.from_schedule_dict(config["beta_schedule"])
+    elif raw.metadata.beta is not None:
+        beta_schedule = BetaSchedule("constant", {"value": float(raw.metadata.beta)})
+    else:
+        beta_schedule = BetaSchedule.from_config(config)
 
     test_grid_cfg = config.get("test_grid", {})
     calibration_cfg = config.get("calibration", {})
@@ -467,7 +491,7 @@ def _process_one_seed(
             m_test_joint_distrib=m_test_joint_distrib,
             m_test_joint_prior_region=m_test_joint_prior_region,
             joint_nlpd_jitter=joint_nlpd_jitter,
-            beta=beta,
+            beta_schedule=beta_schedule,
         )
         methods[name] = PriorMethodProcessed(
             method_name=name,

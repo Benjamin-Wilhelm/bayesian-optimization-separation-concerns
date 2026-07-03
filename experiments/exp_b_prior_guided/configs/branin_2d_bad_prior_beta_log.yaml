@@ -1,0 +1,87 @@
+# Experiment B (branin_2d), BAD prior, with a LOGARITHMIC beta schedule.
+#
+# Identical to branin_2d_bad_prior.yaml except the constant `beta: 8.0` is
+# replaced by a growing schedule beta_t = beta0 + c * log(t + 1).  Purpose:
+# test whether the bad-prior failures persist when UCB exploration is stronger
+# and increases over the budget.  Compare against the constant-beta runs
+# (beta=4, beta=8).
+
+experiment:            exp_b_prior_guided
+tag:                   branin_2d_bad_prior_beta_log
+
+benchmark:
+  name: branin_2d
+  bounds:
+    lower: [0.0, -2.0]
+    upper: [5.5, 6.0]
+
+noise_std:             0.0
+
+orientation:
+  f_min: 0.39788735772973816
+  f_max: 83.60211264227026
+  direction: min
+
+seeds:                 [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50]
+
+prior:
+  label:       bad
+  center:      [0.5, -1.5]
+  lengthscale: [0.825, 1.2]
+
+alpha:                 0.5    # prior weight of alpha_pi_ucb
+
+# UCB exploration schedule (all methods).  `beta_schedule` takes priority over
+# a scalar `beta`; beta_t = beta0 + c * log(t + 1), so it starts at
+# beta0 + c*log(2) ~= 4.69 (t=1) and grows through the budget.
+beta_schedule:
+  type:  log
+  beta0: 4.0
+  c:     1.0
+
+lambda_init:           1.0    # initial lambda of the prior-mean GP
+
+initial_design_size:   4
+budget:                50
+
+num_restarts:          20
+raw_samples:           1024
+device:                cpu
+
+methods:
+  - vanilla_ucb
+  - alpha_pi_ucb
+  - lambda_pi_fixed_standardized_ucb
+  - lambda_pi_adaptive_standardized_ucb
+
+epsilon:               4.0
+
+model:
+  use_fixed_noise:     true
+  normalize_input:     true
+  standardize_output:  true
+
+test_grid:
+  n_test:              2048
+  seed:                123
+  calibration_every:   5
+  m_test_joint_distrib: 64
+  m_test_joint_prior_region: 64
+  joint_nlpd_jitter:   1.0e-6
+
+calibration:
+  compute_global:        true
+  compute_prior_region:  true
+  prior_region_threshold: 0.5
+  compute_joint:         true
+  store_predictions:     true
+
+aggregate:
+  baseline_method:                vanilla_ucb
+  convergence_band_type:          pointwise
+  calibration_band_type:          pointwise
+  residual_band_type:             uniform
+  n_bootstrap:                    10000
+  confidence:                     0.95
+  aggregate_calibration_curves:   true
+  aggregate_instantaneous_curves: true
