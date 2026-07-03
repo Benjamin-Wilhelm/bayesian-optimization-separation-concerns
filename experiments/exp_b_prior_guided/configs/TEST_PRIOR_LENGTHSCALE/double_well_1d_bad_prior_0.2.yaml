@@ -1,0 +1,91 @@
+# Experiment B (double_gaussian_well_1d) with a BAD prior: centered on the SHALLOW well (deceptive local optimum ~= 0.60).
+#
+# Benchmark geometry: two Gaussian wells (minimization), oriented to a
+# maximization problem on the RAW scale (g = -f_raw, no [0, 1] rescaling):
+#   - deep well    at x = 0.70 (depth 1.0, width 0.08)  -> oriented peak f_opt ~= 1.00
+#   - shallow well at x = 0.25 (depth 0.6, width 0.12)  -> oriented local peak ~= 0.60
+# The shallow well is the deceptive basin: wider (easier to find) but with a
+# strictly worse optimum (gap to the global optimum ~= 0.40 on the raw scale).
+
+experiment:            exp_b_prior_guided
+tag:                   double_well_1d_bad_prior
+
+benchmark:
+  name: double_gaussian_well_1d
+  deep_center:    0.70
+  deep_depth:     1.00
+  deep_width:     0.08
+  shallow_center: 0.25
+  shallow_depth:  0.40
+  shallow_width:  0.12
+
+# Observation noise on the RAW oriented scale (depth scale ~= 1.0, f_opt ~= 1.00).
+noise_std:             0.0
+
+# Raw output range is computed by the benchmark itself (dense grid over its
+# actual geometry); no 'orientation:' section is needed.
+
+seeds:                 [1,2,3,4,5,6,7,8,9,10,
+                        ]
+
+# Gaussian domain prior pi_c(x) = exp(-||x - c||^2 / (2 l^2)).
+prior:
+  label:       bad
+  center:      [0.25]
+  lengthscale: 0.20
+
+alpha:                 0.75    # prior weight of alpha_pi_ucb
+beta:                  8.0    # UCB exploration parameter (all methods)
+lambda_init:           1.0    # initial lambda of the prior-mean GP
+
+initial_design_size:   1    # matches Exp A's 1-D convention (n_init = 1)
+budget:                50
+
+num_restarts:          20
+raw_samples:           1024
+device:                cpu
+
+methods:
+  - vanilla_ucb
+  - alpha_pi_ucb
+  #- lambda_pi_fixed_ucb
+  #- lambda_pi_adaptive_ucb
+  #- lambda_pi_fixed_standardized_ucb
+  #- lambda_pi_adaptive_standardized_ucb
+
+# Hitting-time tolerance on the simple regret (RAW scale).  0.35 lies between
+# 0 (deep well found) and ~0.40 (stuck on the shallow well), so the hitting
+# time distinguishes escaping the trap from staying in it.
+epsilon:               0.35
+
+model:
+  use_fixed_noise:     true
+  normalize_input:     true
+  # Standardize(Y) is applied PER METHOD in run.py: ON for vanilla / alpha-pi,
+  # OFF for the prior-to-the-mean methods (mean lambda * f_prior on y-scale).
+  standardize_output:  true
+
+test_grid:
+  n_test:              2048
+  seed:                123
+  calibration_every:   1
+  m_test_joint_distrib: 64
+  m_test_joint_prior_region: 64
+  joint_nlpd_jitter:   1.0e-6
+
+calibration:
+  compute_global:        true
+  compute_prior_region:  true
+  prior_region_threshold: 0.5
+  compute_joint:         true
+  store_predictions:     true
+
+aggregate:
+  baseline_method:                vanilla_ucb
+  convergence_band_type:          pointwise
+  calibration_band_type:          pointwise
+  residual_band_type:             uniform
+  n_bootstrap:                    10000
+  confidence:                     0.95
+  aggregate_calibration_curves:   true
+  aggregate_instantaneous_curves: true

@@ -21,7 +21,7 @@ benchmark:
   shallow_width:  0.12
 
 # Observation noise on the RAW oriented scale (depth scale ~= 1.0).
-noise_std:             0.02
+noise_std:             0.0
 
 seeds:                 [1, 2, 3, 4, 5]
 
@@ -31,7 +31,7 @@ prior:
   lengthscale: 0.10
 
 alpha:                 0.25
-beta:                  7.0
+beta:                  8.0
 lambda_init:           1.0
 
 initial_design_size:   1

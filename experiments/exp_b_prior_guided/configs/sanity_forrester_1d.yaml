@@ -9,7 +9,7 @@ benchmark:
   name: forrester_1d
 
 # Observation noise on the RAW oriented scale (g = -f_raw, f_opt ~= 6.02).
-noise_std:             0.5
+noise_std:             0.0
 
 seeds:                 [1, 2, 3, 4, 5]
 
@@ -20,7 +20,7 @@ prior:
   lengthscale: 0.15
 
 alpha:                 0.5
-beta:                  2.0
+beta:                  8.0
 lambda_init:           1.0
 
 initial_design_size:   1    # matches Exp A (forrester_1d)

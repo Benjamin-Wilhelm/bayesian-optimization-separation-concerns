@@ -39,7 +39,7 @@ prior:
   lengthscale: [0.825, 1.2]
 
 alpha:                 0.5    # prior weight of alpha_pi_ucb
-beta:                  2.0    # UCB exploration parameter (all methods)
+beta:                  8.0    # UCB exploration parameter (all methods)
 lambda_init:           1.0    # initial lambda of the prior-mean GP
 
 initial_design_size:   4    # matches Exp A (branin_2d_short.yaml)
@@ -52,8 +52,8 @@ device:                cpu
 methods:
   - vanilla_ucb
   - alpha_pi_ucb
-  - lambda_pi_fixed_ucb
-  - lambda_pi_adaptive_ucb
+  #- lambda_pi_fixed_ucb
+  #- lambda_pi_adaptive_ucb
   - lambda_pi_fixed_standardized_ucb
   - lambda_pi_adaptive_standardized_ucb
 

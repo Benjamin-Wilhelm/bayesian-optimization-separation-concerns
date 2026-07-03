@@ -8,7 +8,7 @@ benchmark:
   name: forrester_1d
 
 # Observation noise on the RAW oriented scale (g = -f_raw, f_opt ~= 6.02).
-noise_std:             0.5
+noise_std:             0.0
 
 # Orientation defaults come from benchmarks.oriented.KNOWN_OUTPUT_RANGES
 # (raw inner extrema + direction); override here only if needed:
@@ -27,7 +27,7 @@ prior:
   lengthscale: 0.15
 
 alpha:                 0.5    # prior weight of alpha_pi_ucb
-beta:                  2.0    # UCB exploration parameter (all methods)
+beta:                  8.0    # UCB exploration parameter (all methods)
 lambda_init:           1.0    # initial lambda of the prior-mean GP
 
 initial_design_size:   1    # matches Exp A (forrester_1d_full.yaml)
