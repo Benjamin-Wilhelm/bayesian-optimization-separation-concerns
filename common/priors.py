@@ -56,7 +56,12 @@ from botorch.models.transforms.input import Normalize
 from botorch.models.transforms.outcome import Standardize
 from gpytorch.means import Mean
 
-from common.models import GPModelBuilder, GPModelConfig, validate_training_data
+from common.models import (
+    GPModelBuilder,
+    GPModelConfig,
+    make_covar_module,
+    validate_training_data,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +452,9 @@ class PriorGPModelBuilder(GPModelBuilder):
                 kwargs["input_transform"] = Normalize(d=train_X.shape[-1])
         if self.config.standardize_output:
             kwargs["outcome_transform"] = Standardize(m=train_Y.shape[-1])
+        covar_module = make_covar_module(self.config.kernel, train_X.shape[-1])
+        if covar_module is not None:
+            kwargs["covar_module"] = covar_module
 
         if self.config.noise_std is not None:
             kwargs["train_Yvar"] = torch.full_like(train_Y, self.config.noise_std ** 2)

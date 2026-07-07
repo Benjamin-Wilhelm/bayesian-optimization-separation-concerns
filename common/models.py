@@ -29,7 +29,61 @@ except ImportError:
 from botorch.models import FixedNoiseGP, ModelListGP, SingleTaskGP
 from botorch.models.transforms.input import Normalize
 from botorch.models.transforms.outcome import Standardize
+from gpytorch.kernels import Kernel, MaternKernel, RBFKernel, ScaleKernel
 from gpytorch.mlls import ExactMarginalLogLikelihood
+from gpytorch.priors import GammaPrior
+
+
+# ---------------------------------------------------------------------------
+# Kernel selection
+# ---------------------------------------------------------------------------
+#
+# ``matern52`` reproduces the BoTorch default (Matern 5/2 with Gamma priors on
+# the lengthscale and outputscale); it is left to BoTorch so that previously
+# generated runs stay bit-for-bit reproducible.  The other kernels are built
+# explicitly here, with the SAME Gamma hyperpriors as the BoTorch default, so
+# a kernel comparison changes only the covariance function, not the
+# regularisation.
+
+SUPPORTED_KERNELS: tuple[str, ...] = ("matern52", "matern32", "matern12", "rbf")
+
+# BoTorch's default hyperpriors (botorch <= 0.7 SingleTaskGP), reused for the
+# non-default kernels so they remain comparable.
+_LENGTHSCALE_PRIOR = (3.0, 6.0)   # GammaPrior(concentration, rate)
+_OUTPUTSCALE_PRIOR = (2.0, 0.15)
+
+
+def make_covar_module(kernel: str, ard_num_dims: int) -> Optional[Kernel]:
+    """Build the ``covar_module`` for a chosen kernel name.
+
+    Args:
+        kernel: One of :data:`SUPPORTED_KERNELS`.
+        ard_num_dims: Number of input dimensions (per-dimension lengthscales).
+
+    Returns:
+        ``None`` for ``"matern52"`` (use the BoTorch default unchanged), or an
+        explicit :class:`~gpytorch.kernels.ScaleKernel` for the other kernels.
+
+    Raises:
+        ValueError: If ``kernel`` is not supported.
+    """
+    if kernel == "matern52":
+        return None
+    ls_prior = GammaPrior(*_LENGTHSCALE_PRIOR)
+    os_prior = GammaPrior(*_OUTPUTSCALE_PRIOR)
+    if kernel == "matern32":
+        base: Kernel = MaternKernel(nu=1.5, ard_num_dims=ard_num_dims,
+                                    lengthscale_prior=ls_prior)
+    elif kernel == "matern12":
+        base = MaternKernel(nu=0.5, ard_num_dims=ard_num_dims,
+                            lengthscale_prior=ls_prior)
+    elif kernel == "rbf":
+        base = RBFKernel(ard_num_dims=ard_num_dims, lengthscale_prior=ls_prior)
+    else:
+        raise ValueError(
+            f"Unsupported kernel '{kernel}'.  Supported: {SUPPORTED_KERNELS}."
+        )
+    return ScaleKernel(base, outputscale_prior=os_prior)
 
 
 # ---------------------------------------------------------------------------
@@ -94,14 +148,24 @@ class GPModelConfig:
             when input bounds are not ``[0, 1]^d``.
         standardize_output: Apply a ``Standardize`` outcome transform.
             Recommended to keep the GP prior mean and variance well-scaled.
-        kernel: Kernel name.  Only ``"matern52"`` is currently supported;
-            this field is reserved for future extensibility.
+        kernel: Covariance kernel name, one of :data:`SUPPORTED_KERNELS`
+            (``"matern52"`` default, ``"matern32"``, ``"matern12"``,
+            ``"rbf"``).  ``"matern52"`` uses the BoTorch default unchanged;
+            the others are built explicitly with the same Gamma hyperpriors
+            (see :func:`make_covar_module`).
     """
 
     noise_std: Optional[float] = None
     normalize_input: bool = True
     standardize_output: bool = True
     kernel: str = "matern52"
+
+    def __post_init__(self) -> None:
+        if self.kernel not in SUPPORTED_KERNELS:
+            raise ValueError(
+                f"Unsupported kernel '{self.kernel}'.  "
+                f"Supported: {SUPPORTED_KERNELS}."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +273,9 @@ class GPModelBuilder:
             kwargs["input_transform"] = Normalize(d=train_X.shape[-1])
         if self.config.standardize_output:
             kwargs["outcome_transform"] = Standardize(m=train_Y.shape[-1])
+        covar_module = make_covar_module(self.config.kernel, train_X.shape[-1])
+        if covar_module is not None:
+            kwargs["covar_module"] = covar_module
 
         if self.config.noise_std is not None:
             kwargs["train_Yvar"] = torch.full_like(train_Y, self.config.noise_std ** 2)
