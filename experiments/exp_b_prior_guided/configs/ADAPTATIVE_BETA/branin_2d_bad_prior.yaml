@@ -1,13 +1,12 @@
-# Experiment B (branin_2d), BAD prior, with a LOGARITHMIC beta schedule.
+# Experiment B (branin_2d), BAD prior, with a MATERN / GP-UCB beta schedule.
 #
-# Identical to branin_2d_bad_prior.yaml except the constant `beta: 8.0` is
-# replaced by a growing schedule beta_t = beta0 + c * log(t + 1).  Purpose:
-# test whether the bad-prior failures persist when UCB exploration is stronger
-# and increases over the budget.  Compare against the constant-beta runs
-# (beta=4, beta=8).
+# Same problem as branin_2d_bad_prior.yaml but the constant `beta: 8.0` is
+# replaced by the growing matern_gamma schedule (see below).  Purpose: test
+# whether the bad-prior failures persist when UCB exploration is stronger and
+# increases over the budget.  Compare against the constant-beta runs (beta=8).
 
 experiment:            exp_b_prior_guided
-tag:                   branin_2d_bad_prior_beta_log
+tag:                   branin_2d_bad_prior_matern_beta
 
 benchmark:
   name: branin_2d
@@ -32,12 +31,17 @@ prior:
 alpha:                 0.5    # prior weight of alpha_pi_ucb
 
 # UCB exploration schedule (all methods).  `beta_schedule` takes priority over
-# a scalar `beta`; beta_t = beta0 + c * log(t + 1), so it starts at
-# beta0 + c*log(2) ~= 4.69 (t=1) and grows through the budget.
+# a scalar `beta`.  Matern / GP-UCB-inspired schedule; nu=2.5 matches the
+# matern52 GP kernel and beta_t grows with the information-gain proxy
+#   gamma_t = scale * (t+1)^(d(d+1)/(2 nu + d(d+1))) * log(t+1),
+#   sqrt(beta_t) = B + R * sqrt(2 (gamma_{t-1} + 1 + log(1/delta))).
 beta_schedule:
-  type:  log
-  beta0: 4.0
-  c:     1.0
+  type:  matern_gamma
+  B:     1.0
+  R:     1.0
+  delta: 0.1
+  nu:    2.5
+  scale: 0.1
 
 lambda_init:           1.0    # initial lambda of the prior-mean GP
 

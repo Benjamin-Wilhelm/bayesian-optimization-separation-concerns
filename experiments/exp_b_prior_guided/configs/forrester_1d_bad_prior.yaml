@@ -40,8 +40,6 @@ device:                cpu
 methods:
   - vanilla_ucb
   - alpha_pi_ucb
-  - lambda_pi_fixed_ucb
-  - lambda_pi_adaptive_ucb
   - lambda_pi_fixed_standardized_ucb
   - lambda_pi_adaptive_standardized_ucb
 

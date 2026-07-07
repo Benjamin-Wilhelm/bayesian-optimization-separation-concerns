@@ -194,6 +194,7 @@ def make_model_builder(
         noise_std=noise_std if use_fixed_noise else None,
         normalize_input=bool(model_cfg.get("normalize_input", True)),
         standardize_output=standardize_output,
+        kernel=str(model_cfg.get("kernel", "matern52")),
     )
 
     # Raw prior mean f_prior(x) = baseline + amplitude * pi(x) lives on the y
@@ -424,7 +425,8 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--tag", type=str, default=None,
-        help="Override the run tag.  Defaults to config['tag'].",
+        help="Override the run tag.  Defaults to config['tag'], then to the "
+             "config file name (stem).",
     )
     parser.add_argument(
         "--results-root", type=Path,
@@ -456,7 +458,12 @@ def main(argv: Optional[list[str]] = None) -> Path:
     prior = GaussianPrior.from_config(config["prior"], dim=problem.dim)
     beta_schedule = BetaSchedule.from_config(config)
 
-    tag = args.tag or config.get("tag")
+    # Priority: CLI --tag > config 'tag' > config file stem.  The final
+    # fallback keeps run-id generation safe when a config omits 'tag'
+    # (make_run_id would otherwise crash on None) and stays discriminant
+    # (the file name usually encodes benchmark + prior, e.g.
+    # "branin_2d_bad_prior").
+    tag = args.tag or config.get("tag") or args.config.stem
     logger = RunLogger.create(
         experiment=config["experiment"],
         tag=tag,

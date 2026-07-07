@@ -1,0 +1,92 @@
+# Experiment B (hartmann_6d) with a GOOD prior: center at the global minimizer of Hartmann-6.
+
+experiment:            exp_b_prior_guided
+tag:                   hartmann_6d_good_prior_matern_beta
+
+benchmark:
+  name: hartmann_6d
+
+# Observation noise on the RAW oriented scale (g = -f_raw, f_opt ~= 3.32).
+noise_std:             0.0
+
+# Orientation defaults come from benchmarks.oriented.KNOWN_OUTPUT_RANGES
+# (raw inner extrema + direction); override here only if needed:
+# orientation:
+#   f_min: -3.32236801141551   # raw inner minimum
+#   f_max: 0.0                 # raw inner maximum
+#   direction: min
+
+seeds:                 [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50]
+
+# Gaussian domain prior pi_c(x) = exp(-||x - c||^2 / (2 l^2)),
+# expressed in native domain coordinates.
+prior:
+  label:       good
+  center:      [0.20169, 0.150011, 0.476874, 0.275332, 0.311652, 0.6573]
+  lengthscale: 0.2
+
+alpha:                 0.5    # prior weight of alpha_pi_ucb
+
+beta_schedule:
+  type:  matern_gamma
+  B:     1.0
+  R:     1.0
+  delta: 0.1
+  nu:    2.5
+  scale: 0.1
+  
+lambda_init:           1.0    # initial lambda of the prior-mean GP
+
+initial_design_size:   12   # matches Exp A (hartmann_6d_full.yaml)
+budget:                80
+
+num_restarts:          20
+raw_samples:           1024
+device:                cpu
+
+methods:
+  - vanilla_ucb
+  - alpha_pi_ucb
+  #- lambda_pi_fixed_ucb
+  #- lambda_pi_adaptive_ucb
+  - lambda_pi_fixed_standardized_ucb
+  - lambda_pi_adaptive_standardized_ucb
+
+# Hitting-time tolerance on the simple regret (RAW scale; ~6% of the
+# oriented range ~3.32).
+epsilon:               0.2
+
+model:
+  use_fixed_noise:     true
+  normalize_input:     true
+  # Standardize(Y) is applied PER METHOD in run.py: ON for vanilla / alpha-pi
+  # (internal GP transform), OFF for the prior-to-the-mean methods (so the
+  # mean function lambda * f_prior stays on the target scale).  This flag only
+  # affects the standard-GP methods.
+  standardize_output:  true
+
+test_grid:
+  n_test:              4096
+  seed:                123
+  calibration_every:   10
+  m_test_joint_distrib: 64
+  m_test_joint_prior_region: 64
+  joint_nlpd_jitter:   1.0e-6
+
+calibration:
+  compute_global:        true
+  compute_prior_region:  true
+  # Prior region = {x : pi(x) >= threshold}, masked on the global grid.
+  prior_region_threshold: 0.2
+  compute_joint:         true
+  store_predictions:     true
+
+aggregate:
+  baseline_method:                vanilla_ucb
+  convergence_band_type:          pointwise
+  calibration_band_type:          pointwise
+  residual_band_type:             uniform
+  n_bootstrap:                    10000
+  confidence:                     0.95
+  aggregate_calibration_curves:   true
+  aggregate_instantaneous_curves: true

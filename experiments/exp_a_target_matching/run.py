@@ -143,7 +143,8 @@ def _run_one_method(
 
     # Builder: fixed noise for RIGHT, inferred for WRONG.
     builder_noise = problem.default_noise_std if spec["use_fixed_noise"] else None
-    builder = GPModelBuilder(GPModelConfig(noise_std=builder_noise))
+    kernel = str(config.get("model", {}).get("kernel", "matern52"))
+    builder = GPModelBuilder(GPModelConfig(noise_std=builder_noise, kernel=kernel))
 
     # Running state.  We always keep the raw y_obs and apply the method's
     # transform inside the loop so the recipe is fully reproducible by
@@ -291,8 +292,8 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--tag", type=str, default=None,
-        help="Override the run tag.  Defaults to config['tag'] or the "
-             "benchmark name.",
+        help="Override the run tag.  Defaults to config['tag'], then to the "
+             "config file name (stem).",
     )
     parser.add_argument(
         "--results-root", type=Path,
@@ -320,7 +321,11 @@ def main(argv: Optional[list[str]] = None) -> Path:
     device = resolve_device(device_name)
     problem = build_benchmark(config)
 
-    tag = args.tag or config.get("tag") 
+    # Priority: CLI --tag > config 'tag' > config file stem.  The final
+    # fallback keeps make_run_id from crashing on a None tag when a config
+    # omits it, and stays discriminant (the file name usually encodes the
+    # benchmark, e.g. "branin_2d_short").
+    tag = args.tag or config.get("tag") or args.config.stem
     logger = RunLogger.create(
         experiment=config["experiment"],
         tag=tag,

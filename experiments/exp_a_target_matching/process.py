@@ -132,7 +132,13 @@ def _rebuild_gp_at_snapshot(
     """Construct a GP of the same shape as the snapshot's, then load its
     serialised state dict.  No MLL fitting.
     """
-    config = GPModelConfig(noise_std=snapshot.noise_std)
+    # Rebuild with the SAME kernel that produced the snapshot (stored as
+    # kernel_name), so the reconstructed covariance matches; fall back to the
+    # default for legacy snapshots.
+    config = GPModelConfig(
+        noise_std=snapshot.noise_std,
+        kernel=snapshot.kernel_name or "matern52",
+    )
     builder = GPModelBuilder(config)
     model = builder.construct(train_X, train_Y)
     load_state_dict_into(model, snapshot.state_dict)
