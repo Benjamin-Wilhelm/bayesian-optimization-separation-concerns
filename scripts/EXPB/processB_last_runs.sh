@@ -51,15 +51,15 @@ mapfile -t matches < <(
       -name "*double_well_1d_bad_prior*" \
       -o -name "*double_well_1d_good_prior*" \
       -o -name "*double_well_1d_medium_prior*" \
-      -o -name "*branin_2d_bad_prior" \
-      -o -name "*branin_2d_good_prior" \
-      -o -name "*hartmann_6d_bad_prior" \
-      -o -name "*hartmann_6d_good_prior" \
-      -o -name "*hartmann_3d_bad_prior" \
-      -o -name "*hartmann_3d_good_prior" \
-      -o -name "*forrester_1d_good_prior" \
-      -o -name "*forrester_1d_bad_prior" \
-      -o -name "*diag_double_well_standardized" \
+      -o -name "*branin_2d_bad_prior*" \
+      -o -name "*branin_2d_good_prior*" \
+      -o -name "*hartmann_6d_bad_prior*" \
+      -o -name "*hartmann_6d_good_prior*" \
+      -o -name "*hartmann_3d_bad_prior*" \
+      -o -name "*hartmann_3d_good_prior*" \
+      -o -name "*forrester_1d_good_prior*" \
+      -o -name "*forrester_1d_bad_prior*" \
+      -o -name "*diag_double_well_standardized*" \
     \) \
     -printf "%T@ %p\n" \
     | sort -nr \

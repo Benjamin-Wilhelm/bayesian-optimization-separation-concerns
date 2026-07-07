@@ -43,9 +43,10 @@ run_one() {
 
   echo "Launching ${name}"
 
+  # No --tag: let the run be named by the config's `tag:` field
+  # (falls back to the benchmark name in run.py if the config omits it).
   "$PYTHON" -m experiments.exp_b_prior_guided.run \
     --config "${CONFIG_DIR}/${cfg}" \
-    --tag "${name}" \
     > "${log_file}" 2>&1 &
 }
 

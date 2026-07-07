@@ -6,7 +6,7 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
-CONFIG_DIR="experiments/exp_b_prior_guided/configs"
+CONFIG_DIR="experiments/exp_b_prior_guided/configs/ADAPTATIVE_BETA"
 LOG_DIR="logsB_cpu_runs"
 MAX_PARALLEL=8
 
@@ -22,12 +22,12 @@ mkdir -p "$LOG_DIR"
 #Uncomment the config of which you wanna create data
 CONFIGS=(
   
-  #"branin_2d_bad_prior.yaml"
-  #"branin_2d_good_prior.yaml"
+  "branin_2d_bad_prior.yaml"
+  "branin_2d_good_prior.yaml"
   "double_well_1d_good_prior.yaml"
-  #"double_well_1d_bad_prior.yaml"
-  #"hartmann_6d_bad_prior.yaml"
-  #"hartmann_6d_good_prior.yaml"
+  "double_well_1d_bad_prior.yaml"
+  "hartmann_6d_bad_prior.yaml"
+  "hartmann_6d_good_prior.yaml"
   "forrester_1d_bad_prior.yaml"
   "forrester_1d_good_prior.yaml"
   #"sanity_double_well_1d.yaml"
@@ -40,9 +40,10 @@ run_one() {
 
   echo "Launching ${name}"
 
+  # No --tag: let the run be named by the config's `tag:` field
+  # (falls back to the benchmark name in run.py if the config omits it).
   "$PYTHON" -m experiments.exp_b_prior_guided.run \
     --config "${CONFIG_DIR}/${cfg}" \
-    --tag "${name}" \
     > "${log_file}" 2>&1 &
 }
 
