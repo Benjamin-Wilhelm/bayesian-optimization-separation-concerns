@@ -684,7 +684,11 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
                     labels.append(style_for(m)["label"]); colors.append(style_for(m)["color"])
                 if not data:
                     continue
-                bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, showfliers=False)
+                bp = ax.boxplot(data, tick_labels=labels, patch_artist=True,
+                                showfliers=False, whis=(5, 95),
+                                showmeans=True, meanline=True,
+                                medianprops=dict(color="black", lw=1.4),
+                                meanprops=dict(color="black", ls="--", lw=1.4))
                 for patch, c in zip(bp["boxes"], colors):
                     patch.set_facecolor(c); patch.set_alpha(0.4)
                 for i, d in enumerate(data):
@@ -693,7 +697,13 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
                 ax.set_ylabel(ylab)
                 ax.set_title(f"Final {title}")
                 ax.tick_params(axis="x", rotation=12)
-            fig.suptitle("Final-regret distributions across seeds")
+            # box: 25-75%, whiskers: 5th-95th percentile; solid = median, dashed = mean
+            from matplotlib.lines import Line2D
+            _dist_handles = [Line2D([0], [0], color="black", lw=1.4, label="median"),
+                             Line2D([0], [0], color="black", lw=1.4, ls="--", label="mean")]
+            axes[0].legend(handles=_dist_handles, loc="best", fontsize=8)
+            fig.suptitle("Final-regret distributions across seeds\n"
+                         "box: 25-75%, whiskers: 5-95%, solid: median, dashed: mean")
             fig.tight_layout(); add_figure("03_final_regret_distributions", fig)
 
         # 3.5 hitting time and failure rate

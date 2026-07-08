@@ -528,7 +528,10 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         positions = np.arange(len(methods))
         vals = [np.clip(data[m], 1e-12, None) for m in methods]
         bp = ax.boxplot(vals, positions=positions, widths=0.5, showfliers=False,
-                        patch_artist=True)
+                        patch_artist=True, whis=(5, 95),
+                        showmeans=True, meanline=True,
+                        medianprops=dict(color="black", lw=1.4),
+                        meanprops=dict(color="black", ls="--", lw=1.4))
         for patch, m in zip(bp["boxes"], methods):
             patch.set_facecolor(style_for(m)["color"]); patch.set_alpha(0.30)
         for k, m in enumerate(methods):
@@ -539,7 +542,13 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         ax.set_xticks(positions)
         ax.set_xticklabels([style_for(m)["label"] for m in methods], rotation=10)
         ax.set_title(metric)
-    fig.suptitle(f"Final performance distribution across {n_seeds} seeds (log scale)")
+    # box: 25-75%, whiskers: 5th-95th percentile; solid line = median, dashed = mean
+    from matplotlib.lines import Line2D
+    _dist_handles = [Line2D([0], [0], color="black", lw=1.4, label="median"),
+                     Line2D([0], [0], color="black", lw=1.4, ls="--", label="mean")]
+    axes[0].legend(handles=_dist_handles, loc="best", fontsize=8)
+    fig.suptitle(f"Final performance distribution across {n_seeds} seeds (log scale)\n"
+                 "box: 25-75%, whiskers: 5-95%, solid: median, dashed: mean")
     fig.tight_layout()
     add_figure("03_final_distribution", fig)
 
