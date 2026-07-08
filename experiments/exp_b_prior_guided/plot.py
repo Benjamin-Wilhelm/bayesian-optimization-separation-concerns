@@ -780,21 +780,21 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         bo_x = np.asarray(PROCESSED[0].methods[_lambda_methods[0]].convergence.bo_iteration, float)
         for m in _lambda_methods:
             st = style_for(m)
-            for psd in PROCESSED:
-                lam = psd.methods[m].convergence.lambda_per_iteration
-                if lam is not None:
-                    ax.plot(bo_x, lam, color=st["color"], lw=0.7, alpha=0.25)
-            entry = conv_band(m, "lambda_per_iteration") if CONV is not None else None
-            if entry is not None:
-                ax.plot(bo_x, entry["center"], color=st["color"], lw=2.2, label=st["label"] + " (median)")
-                if entry.get("lower") is not None and entry["lower"][0] is not None:
-                    ax.fill_between(bo_x, entry["lower"], entry["upper"],
-                                    color=st["color"], alpha=0.15, lw=0)
+            A = seed_curves(m, "lambda_per_iteration")
+            if A is None:
+                continue
+            med, mean = np.median(A, 0), np.mean(A, 0)
+            ci = bootstrap_ci_curves(A, statistic="median",
+                                     confidence=_CI_CONF, n_bootstrap=_CI_NBOOT,
+                                     random_state=0)
+            ax.plot(bo_x, med, color=st["color"], lw=2.4, label=st["label"])
+            ax.plot(bo_x, mean, color=st["color"], lw=1.3, ls="--", alpha=0.85)
+            ax.fill_between(bo_x, ci["lower"], ci["upper"], color=st["color"], alpha=0.14, lw=0)
         ax.axhline(1.0, color="grey", ls="--", lw=1.0, label=r"$\lambda = 1$ (fixed method)")
         ax.axhline(0.0, color="grey", ls=":", lw=1.0, label=r"$\lambda = 0$ (prior rejected)")
         ax.set_xlabel("BO iteration $t$"); ax.set_ylabel(r"$\hat\lambda_t$")
-        ax.set_title("Adaptive prior-mean coefficient")
-        ax.legend(loc="best")
+        ax.set_title("Adaptive prior-mean coefficient (solid: median, dashed: mean)")
+        ax.legend(loc="best", fontsize=8)
         fig.tight_layout(); add_figure("04_lambda_trajectory", fig)
     else:
         logger.info("no prior-mean method with stored lambda trajectories in this run.")
