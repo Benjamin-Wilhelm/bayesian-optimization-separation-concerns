@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -38,6 +39,22 @@ from common.serialization import load_json
 from benchmarks import build_benchmark
 
 logger = logging.getLogger("exp_a.plot")
+
+
+def _long_path(path: Path) -> str:
+    """Return a save path safe against Windows' 260-char MAX_PATH limit.
+
+    On Windows the deep ``results/.../figures/<fig>.png`` paths can exceed
+    MAX_PATH, which makes ``open()`` fail with a misleading
+    ``FileNotFoundError`` even though the directory exists.  Prefixing the
+    absolute path with the ``\\?\`` extended-length marker lifts the limit.
+    No-op on non-Windows platforms.
+    """
+    if os.name != "nt":
+        return str(path)
+    abs_path = os.path.abspath(str(path))
+    return abs_path if abs_path.startswith("\\\\?\\") else "\\\\?\\" + abs_path
+
 
 # --- global plotting style (copied from the notebook) -----------------------
 plt.rcParams.update({
@@ -843,8 +860,8 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
     for name, fig in FIGURES.items():
         png = FIG_DIR / f"{name}.png"
         pdf = FIG_DIR / f"{name}.pdf"
-        fig.savefig(png)
-        fig.savefig(pdf)
+        fig.savefig(_long_path(png), format="png")
+        fig.savefig(_long_path(pdf), format="pdf")
         plt.close(fig)
         saved.append(name)
 

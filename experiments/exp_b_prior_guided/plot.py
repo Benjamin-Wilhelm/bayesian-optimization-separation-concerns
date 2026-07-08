@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +52,22 @@ from experiments.exp_b_prior_guided.process import (
 from acquisitions.prior_guided import VanillaUCB
 
 logger = logging.getLogger("exp_b.plot")
+
+
+def _long_path(path: Path) -> str:
+    """Return a save path safe against Windows' 260-char MAX_PATH limit.
+
+    On Windows the deep ``results/.../figures/<bench>/<fig>.png`` paths can
+    exceed MAX_PATH, which makes ``open()`` fail with a misleading
+    ``FileNotFoundError`` even though the directory exists.  Prefixing the
+    absolute path with the ``\\?\`` extended-length marker lifts the limit.
+    No-op on non-Windows platforms.
+    """
+    if os.name != "nt":
+        return str(path)
+    abs_path = os.path.abspath(str(path))
+    return abs_path if abs_path.startswith("\\\\?\\") else "\\\\?\\" + abs_path
+
 
 DEVICE = torch.device("cpu")
 torch.set_default_dtype(torch.double)
@@ -1112,7 +1129,7 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
     export_formats = ("png", "pdf")
     for name, fig in FIGURES.items():
         for ext in export_formats:
-            fig.savefig(out_dir / f"{name}.{ext}")
+            fig.savefig(_long_path(out_dir / f"{name}.{ext}"), format=ext)
         plt.close(fig)
     logger.info("[%s] saved %d figures (x %d formats) to %s",
                 BENCH_NAME, len(FIGURES), len(export_formats), out_dir)
