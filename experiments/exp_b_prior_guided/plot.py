@@ -140,6 +140,15 @@ def _apply_style() -> str:
     return backend
 
 
+def _clear_stale_figures(out_dir: Path) -> None:
+    """Remove pre-existing figure files so re-running plot.py overwrites
+    in place instead of accumulating stale files left over from figures
+    that a previous code revision produced under a different name."""
+    for pattern in ("*.png", "*.pdf"):
+        for f in out_dir.glob(pattern):
+            f.unlink()
+
+
 def seed_band(ax, x, Y, *, color, label=None, pct=(25, 75),
               show_seeds=False, show_mean=False, lw=2.2, alpha_band=0.15):
     """Median curve + inter-seed percentile band (NaN-robust).  ``Y`` is (n_seeds, n_x)."""
@@ -1126,6 +1135,7 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
     # ========================================================================
     out_dir = RUN_DIR / "figures" / BENCH_NAME
     out_dir.mkdir(parents=True, exist_ok=True)
+    _clear_stale_figures(out_dir)
     export_formats = ("png", "pdf")
     for name, fig in FIGURES.items():
         for ext in export_formats:

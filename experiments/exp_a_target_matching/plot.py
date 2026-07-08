@@ -28,6 +28,7 @@ from typing import Optional
 
 import matplotlib
 matplotlib.use("Agg")  # headless: never require a display / GUI backend
+import matplotlib as mpl
 
 import numpy as np
 import pandas as pd
@@ -69,6 +70,56 @@ plt.rcParams.update({
     "axes.grid": True,
     "grid.alpha": 0.3,
 })
+
+
+# --- centralized publication style (copied from the Exp-B notebook) ---------
+def _apply_style() -> str:
+    """Apply the notebook's figure theme; return the backend that was used."""
+    backend = "matplotlib-fallback"
+    try:
+        import scienceplots  # noqa: F401  (registers the 'science' style sheets)
+        plt.style.use(["science", "grid", "no-latex"])
+        backend = "scienceplots"
+    except Exception:
+        try:
+            import seaborn as sns
+            sns.set_theme(context="notebook", style="whitegrid",
+                          palette="colorblind", font_scale=1.0)
+            backend = "seaborn"
+        except Exception:
+            pass
+
+    mpl.rcParams.update({
+        "text.usetex": False,
+        "mathtext.fontset": "cm",
+        "figure.dpi": 120, "savefig.dpi": 300,
+        "savefig.bbox": "tight", "savefig.transparent": False,
+        "figure.facecolor": "white", "axes.facecolor": "white",
+        "savefig.facecolor": "white",
+        "font.size": 11, "axes.titlesize": 12, "axes.labelsize": 11,
+        "xtick.labelsize": 9.5, "ytick.labelsize": 9.5, "legend.fontsize": 9,
+        "axes.titleweight": "semibold",
+        "axes.linewidth": 0.9, "axes.edgecolor": "#333333",
+        "lines.linewidth": 2.0, "lines.markersize": 6,
+        "axes.grid": True, "grid.color": "#B0B0B0",
+        "grid.linewidth": 0.6, "grid.alpha": 0.35, "axes.axisbelow": True,
+        "legend.frameon": True, "legend.framealpha": 0.9,
+        "legend.edgecolor": "#CCCCCC", "legend.fancybox": False,
+    })
+    colorblind_cycle = ["#0072B2", "#E69F00", "#009E73", "#D55E00",
+                        "#CC79A7", "#56B4E9", "#F0E442", "#000000"]
+    mpl.rcParams["axes.prop_cycle"] = mpl.cycler(color=colorblind_cycle)
+    return backend
+
+
+def _clear_stale_figures(out_dir: Path) -> None:
+    """Remove pre-existing figure files so re-running plot.py overwrites
+    in place instead of accumulating stale files left over from figures
+    that a previous code revision produced under a different name."""
+    for pattern in ("*.png", "*.pdf"):
+        for f in out_dir.glob(pattern):
+            f.unlink()
+
 
 # Canonical colours / labels for the two compared methods.
 METHOD_STYLE = {
@@ -863,6 +914,7 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
     # ========================================================================
     # Save all figures
     # ========================================================================
+    _clear_stale_figures(FIG_DIR)
     saved = []
     for name, fig in FIGURES.items():
         png = FIG_DIR / f"{name}.png"
@@ -922,6 +974,9 @@ def main(argv: Optional[list[str]] = None) -> None:
         format="%(asctime)s  %(levelname)-8s  %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    backend = _apply_style()
+    logger.info("[style] backend = %s (usetex off, colour-blind palette active)", backend)
+
     args = _parse_args(argv)
     run_dir: Path = args.run_dir.resolve()
 
