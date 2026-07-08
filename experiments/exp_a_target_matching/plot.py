@@ -36,6 +36,7 @@ from scipy.stats import norm
 import torch
 
 from common.serialization import load_json
+from common.acquisition_utils import BetaSchedule
 from benchmarks import build_benchmark
 
 logger = logging.getLogger("exp_a.plot")
@@ -139,10 +140,14 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
     raw0 = load_json(_raw_files[0]) if _raw_files else None
 
     T = float(config["target"])
-    BETA = float(config["beta"])
 
     benchmark = build_benchmark(config)
     DIM = int(benchmark.dim)
+
+    # Scalar UCB coefficient used by the acquisition diagnostics.  Handles both
+    # a constant `beta` and a `beta_schedule` (log / matern), mirroring run.py;
+    # for a constant schedule this equals the former float(config["beta"]).
+    BETA = float(BetaSchedule.from_config(config).beta_at(1, DIM))
 
     PREDICTIONS_AVAILABLE = any(
         c.get("predictions") for c in seed0["methods"][methods[0]]["calibrations"]
@@ -154,8 +159,10 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
     )
 
     # ---- sanity checks ------------------------------------------------------
-    assert config["benchmark"] == BENCHMARK, (
-        f"config benchmark {config['benchmark']!r} != selected BENCHMARK {BENCHMARK!r}"
+    cfg_bench = config["benchmark"]
+    cfg_bench_name = cfg_bench["name"] if isinstance(cfg_bench, dict) else cfg_bench
+    assert cfg_bench_name == BENCHMARK, (
+        f"config benchmark {cfg_bench_name!r} != selected BENCHMARK {BENCHMARK!r}"
     )
     for label, path in [("RUN_DIR", RUN_DIR), ("AGG_DIR", AGG_DIR), ("PER_SEED_DIR", PER_SEED_DIR)]:
         assert path.exists(), f"{label} does not exist: {path}"
