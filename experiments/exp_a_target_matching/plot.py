@@ -155,7 +155,8 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         conf = payload.get("confidence")
         conf_s = f"{int(round(100 * conf))}%" if conf is not None else "?"
         simul = " (simultaneous)" if bt == "uniform" else ""
-        return f"{stat} over {n} seeds, {conf_s} {bt} bootstrap band{simul}"
+        mean_note = "; dashed: mean" if payload.get("mean") is not None else ""
+        return f"{stat} over {n} seeds, {conf_s} {bt} bootstrap band{simul}{mean_note}"
 
     # ========================================================================
     # 1. Geometry of the target-matching problem
@@ -467,6 +468,13 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
                     label=style["label"])
             ax.fill_between(conv_iters, np.asarray(cur["lower"]), np.asarray(cur["upper"]),
                             color=style["color"], alpha=0.20)
+            # Secondary dashed curve: pointwise mean across seeds (median is the
+            # solid center).  Absent on aggregate files written before analyze.py
+            # stored it, in which case we simply skip it.
+            mean_curve = cur.get("mean")
+            if mean_curve is not None:
+                ax.plot(conv_iters, np.asarray(mean_curve), color=style["color"],
+                        lw=1.1, ls="--", alpha=0.85)
         if logy:
             ax.set_yscale("log")
         ax.set_xlabel("iteration $t$")

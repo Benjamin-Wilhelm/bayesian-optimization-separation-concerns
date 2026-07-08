@@ -40,6 +40,7 @@ from scipy.stats import norm as _norm
 
 from common.serialization import load_json
 from common.priors import GaussianPrior, PriorMeanModule
+from common.statistics import bootstrap_ci_curves
 from benchmarks.oriented import build_oriented_benchmark
 from data.raw_prior import RawPriorSeedData
 from data.processed_prior import ProcessedPriorSeedData
@@ -258,8 +259,8 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         model = _rebuild_gp_at_snapshot(snap, traj, config, problem, prior, train_X, train_Y)
         return model, train_X, snap
 
-    def acq_for(method: str, model):
-        return _METHOD_SPECS[method]["acq_builder"](model, prior, ALPHA, BETA)
+    def acq_for(method: str, model, beta):
+        return _METHOD_SPECS[method]["acq_builder"](model, prior, ALPHA, beta)
 
     def eval_acq(acq, X_np: np.ndarray) -> np.ndarray:
         X = torch.as_tensor(np.atleast_2d(X_np), dtype=torch.double).unsqueeze(1)
@@ -277,6 +278,14 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
     def lambda_at(raw: RawPriorSeedData, method: str, iteration: int) -> Optional[float]:
         step = raw.methods[method].trajectory[iteration - 1]
         return step.lambda_value
+
+    def beta_at_iter(raw: RawPriorSeedData, method: str, iteration: int) -> float:
+        """Per-iteration beta_t actually used to select the candidate at `iteration`
+        (1-based).  With an adaptive beta_schedule beta_t varies across iterations;
+        falls back to the scalar BETA for legacy runs without a stored beta_value."""
+        step = raw.methods[method].trajectory[iteration - 1]
+        b = getattr(step, "beta_value", None)
+        return float(b) if b is not None else BETA
 
     def queries_np(raw: RawPriorSeedData, method: str) -> np.ndarray:
         return np.asarray([s.x for s in raw.methods[method].trajectory], dtype=float)
@@ -390,7 +399,8 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         for k, t in enumerate(iters):
             model, train_X, snap = gp_at(raw, method, t)
             mu, sd = posterior_np(model, X_eval)
-            acq = acq_for(method, model)
+            beta_t = beta_at_iter(raw, method, t)
+            acq = acq_for(method, model, beta_t)
             a_vals = eval_acq(acq, X_eval)
             x_next = np.asarray(raw.methods[method].trajectory[t - 1].x)
             lam = lambda_at(raw, method, t)
@@ -398,9 +408,9 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
             ax = axes[0, k]
             ax.plot(x_axis, f_curve, color="black", lw=1.0, alpha=0.7, label=r"$f$")
             ax.plot(x_axis, mu, color=st["color"], lw=1.5, label=r"$\mu_t$")
-            ax.fill_between(x_axis, mu - math.sqrt(BETA) * sd, mu + math.sqrt(BETA) * sd,
+            ax.fill_between(x_axis, mu - math.sqrt(beta_t) * sd, mu + math.sqrt(beta_t) * sd,
                             color=st["color"], alpha=0.18, lw=0,
-                            label=r"$\mu_t \pm \sqrt{\beta}\sigma_t$")
+                            label=r"$\mu_t \pm \sqrt{\beta_t}\sigma_t$")
             if lam is not None:
                 ax.plot(x_axis, lam * pi_curve, color="#2ca02c", ls="--", lw=1.2,
                         label=rf"$\hat\lambda_t\,\pi$ ($\hat\lambda$={lam:.2f})")
@@ -422,7 +432,7 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
             ax = axes[1, k]
             ax.plot(x_axis, a_vals, color=st["color"], lw=1.5, label="acquisition")
             if method == "alpha_pi_ucb":
-                ref = eval_acq(VanillaUCB(model, beta=BETA), X_eval)
+                ref = eval_acq(VanillaUCB(model, beta=beta_t), X_eval)
                 ax.plot(x_axis, ref, color="grey", ls="--", lw=1.0, label="vanilla UCB (same GP)")
             if nxt is not None:
                 ax.axvline(nxt, color=st["color"], ls="-", lw=0.8, alpha=0.6)
@@ -497,11 +507,12 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
             for r, t in enumerate(SNAPSHOT_ITERS_2D):
                 model, train_X, _ = gp_at(raw_rep, method, t)
                 mu, sd = posterior_np(model, XYs)
-                ucb = mu + math.sqrt(BETA) * sd
-                a_vals = eval_acq(acq_for(method, model), XYs)
+                beta_t = beta_at_iter(raw_rep, method, t)
+                ucb = mu + math.sqrt(beta_t) * sd
+                a_vals = eval_acq(acq_for(method, model, beta_t), XYs)
                 x_next = np.asarray(raw_rep.methods[method].trajectory[t - 1].x)
                 panels = [(mu, r"$\mu_t$", "viridis"), (sd, r"$\sigma_t$", "magma"),
-                          (ucb, r"UCB $\mu_t+\sqrt{\beta}\sigma_t$", "cividis"),
+                          (ucb, r"UCB $\mu_t+\sqrt{\beta_t}\sigma_t$", "cividis"),
                           (a_vals, "actual acquisition", "cividis")]
                 for c, (Z, title, cmap) in enumerate(panels):
                     ax = axes[r, c]
@@ -560,7 +571,13 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
     # ========================================================================
     CONV = AGG["convergence"]
 
-    BAND_PCT = (10, 90)
+    # Convergence bands: bootstrap CI of the median (publication-style, and
+    # consistent with Exp A).  Catastrophic / trapped-seed information is not
+    # lost: it is carried by the dashed mean line (which diverges from the
+    # median under bimodality), the final-regret distributions (3.4) and the
+    # hitting-time / failure-rate figure (3.5).
+    _CI_CONF  = float(CONV.get("confidence", 0.95)) if isinstance(CONV, dict) else 0.95
+    _CI_NBOOT = int(CONV.get("n_bootstrap", 10000)) if isinstance(CONV, dict) else 10000
     _LOG_FLOOR = 1e-7
 
     CONV_KEYS = {
@@ -594,8 +611,10 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
                 if A is None:
                     continue
                 med, mean = np.median(A, 0), np.mean(A, 0)
-                lo = np.percentile(A, BAND_PCT[0], 0)
-                hi = np.percentile(A, BAND_PCT[1], 0)
+                ci = bootstrap_ci_curves(A, statistic="median",
+                                         confidence=_CI_CONF, n_bootstrap=_CI_NBOOT,
+                                         random_state=0)
+                lo, hi = ci["lower"], ci["upper"]
                 if logy:
                     med, mean = np.maximum(med, _LOG_FLOOR), np.maximum(mean, _LOG_FLOOR)
                     lo, hi = np.maximum(lo, _LOG_FLOOR), np.maximum(hi, _LOG_FLOOR)
@@ -642,7 +661,42 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         ax.legend(loc="best", fontsize=8)
         fig.tight_layout(); add_figure("03_cumulative_regret", fig)
 
-        # 3.4 hitting time and failure rate
+        # 3.4 final-regret distributions across seeds (severity of outcomes;
+        # complements the hitting-time / failure-rate view below, which shows
+        # only frequency).  Boxplot + per-seed points, one panel per regret.
+        _final_specs = [
+            ("simple_regret",          "best-so-far regret", r"$r_N^{\mathrm{best}}$"),
+            ("cumulative_inst_regret", "cumulative regret",   r"$R_N$"),
+        ]
+        if any(seed_curves(m, k) is not None
+               for m in METHODS for k, _, _ in _final_specs):
+            fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.0))
+            _rng = np.random.default_rng(0)
+            for ax, (key, title, ylab) in zip(axes, _final_specs):
+                data, labels, colors = [], [], []
+                for m in METHODS:
+                    A = seed_curves(m, key)
+                    if A is None:
+                        continue
+                    finals = A[:, -1]
+                    finals = finals[np.isfinite(finals)]
+                    data.append(finals)
+                    labels.append(style_for(m)["label"]); colors.append(style_for(m)["color"])
+                if not data:
+                    continue
+                bp = ax.boxplot(data, tick_labels=labels, patch_artist=True, showfliers=False)
+                for patch, c in zip(bp["boxes"], colors):
+                    patch.set_facecolor(c); patch.set_alpha(0.4)
+                for i, d in enumerate(data):
+                    ax.plot(np.full(len(d), i + 1) + _rng.uniform(-0.08, 0.08, len(d)),
+                            d, "o", ms=4, color=colors[i], alpha=0.6)
+                ax.set_ylabel(ylab)
+                ax.set_title(f"Final {title}")
+                ax.tick_params(axis="x", rotation=12)
+            fig.suptitle("Final-regret distributions across seeds")
+            fig.tight_layout(); add_figure("03_final_regret_distributions", fig)
+
+        # 3.5 hitting time and failure rate
         if EPSILON is None:
             logger.info("no epsilon configured — hitting times not computed.")
         else:

@@ -305,7 +305,11 @@ def _build_convergence_curves(
                 n_bootstrap=n_bootstrap,
                 band_type=band_type,
             )[m]
-            method_curves[key] = _serialize_band(agg, band_type)
+            serialized = _serialize_band(agg, band_type)
+            # Pointwise mean across seeds, stored alongside the (median) center
+            # so figures can overlay it as a secondary dashed curve.  NaN-robust.
+            serialized["mean"] = np.nanmean(curves, axis=0).tolist()
+            method_curves[key] = serialized
         out["methods"][m] = method_curves
     return out
 
