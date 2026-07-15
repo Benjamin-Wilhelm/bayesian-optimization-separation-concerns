@@ -1,0 +1,52 @@
+# Experiment C — fixed scalarization on ZDT1 (input_dim = 2).
+# ZDT1 has a convex (fully supported) front: linear scalarization can reach
+# every point of it.  RIGHT vs WRONG differ only in WHERE the scalarization
+# is applied.
+experiment_mode: fixed_scalarization
+tag: zdt1_d2
+
+benchmark:
+  name: zdt1
+  input_dim: 2
+  orientation: maximize
+  normalization: fixed
+
+methods:
+  - right
+  - wrong
+
+scalarizations:
+  - linear
+  - hypervolume
+
+lambda:
+  mode: fixed_angles
+  angles_degrees: [10, 30, 45, 60, 80]
+
+budget: 50
+initial_design_size: 5
+
+seeds:
+  start: 1
+  end: 50
+
+noise:
+  std: 0.0
+
+model:
+  kernel: matern52
+
+acquisition:
+  type: ucb
+  beta: 8.0
+  raw_samples: 1024
+  num_restarts: 20
+
+reference:
+  pareto_front_resolution: 10000
+
+diagnostics:
+  save_posterior: false
+  save_acquisition: false
+
+device: cpu

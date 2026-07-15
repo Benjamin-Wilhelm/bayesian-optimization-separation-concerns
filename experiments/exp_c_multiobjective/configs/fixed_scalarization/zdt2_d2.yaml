@@ -1,0 +1,51 @@
+# Experiment C — fixed scalarization.  ZDT2 (input_dim=2) has a concave (has NON-supported points): linear scalarization
+# CANNOT reach the interior of the front.  A coverage gap there is a
+# limitation of the linear scalarization family, NOT of RIGHT vs WRONG.
+experiment_mode: fixed_scalarization
+tag: zdt2_d2
+
+benchmark:
+  name: zdt2
+  input_dim: 2
+  orientation: maximize
+  normalization: fixed
+
+methods:
+  - right
+  - wrong
+
+scalarizations:
+  - linear
+  - hypervolume
+
+lambda:
+  mode: fixed_angles
+  angles_degrees: [10, 30, 45, 60, 80]
+
+budget: 50
+initial_design_size: 5
+
+seeds:
+  start: 1
+  end: 50
+
+noise:
+  std: 0.0
+
+model:
+  kernel: matern52
+
+acquisition:
+  type: ucb
+  beta: 8.0
+  raw_samples: 1024
+  num_restarts: 20
+
+reference:
+  pareto_front_resolution: 10000
+
+diagnostics:
+  save_posterior: false
+  save_acquisition: false
+
+device: cpu

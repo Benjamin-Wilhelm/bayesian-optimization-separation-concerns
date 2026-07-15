@@ -6,9 +6,9 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
-CONFIG_DIR="experiments/exp_a_target_matching/configs"
+CONFIG_DIR="experiments/exp_a_target_matching/configs/ADAPTATIVE_MATERN_BETA"
 LOG_DIR="logs_cpu_runs"
-MAX_PARALLEL=2
+MAX_PARALLEL=8
 
 PYTHON="python"
 if [[ -x ".venv/bin/python" ]]; then
@@ -23,10 +23,10 @@ CONFIGS=(
   #"linear_1d_short.yaml"
   #"exponential_1d_short.yaml"
   #"branin_2d_short.yaml"
-  #"hartmann_6d_full.yaml"
+  "hartmann_6d_full.yaml"
   #"gaussian_trap_1d_short.yaml"
   #"gaussian_trap_1d_short_thin.yaml"
-  "gaussian_trap_1d_short_shifted.yaml"
+  #"gaussian_trap_1d_short_shifted.yaml"
   #"gaussian_trap_1d_short_deep.yaml"
 )
 

@@ -6,7 +6,7 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
-CONFIG_DIR="experiments/exp_b_prior_guided/configs/ADAPTATIVE_BETA"
+CONFIG_DIR="experiments/exp_b_prior_guided/configs/ADAPTATIVE_LOG_BETA"
 LOG_DIR="logsB_cpu_runs"
 MAX_PARALLEL=8
 

@@ -38,6 +38,7 @@ import torch
 
 from common.serialization import load_json
 from common.acquisition_utils import BetaSchedule
+from common.models import GPModelBuilder, GPModelConfig
 from benchmarks import build_benchmark
 
 logger = logging.getLogger("exp_a.plot")
@@ -341,36 +342,87 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
     CALIB_ITERS = [c["iteration_index"] for c in _rec["methods"][methods[0]]["calibrations"]]
     POSTERIOR_ITERS = [it for it in POSTERIOR_ITERS_REQUESTED if it in CALIB_ITERS]
 
+    # "Early" zoom into the first iterations (0, 2, 4, 6, 9).  t=0 is drawn as a
+    # dedicated "init" column (GP fit on the initial design only, reconstructed
+    # by _init_posterior_1d); the remaining iterations come from stored
+    # calibrations, so they are non-trivial only when calibration_every == 1.
+    EARLY_POSTERIOR_ITERS_REQUESTED = [2, 4, 6, 9]
+    EARLY_POSTERIOR_ITERS = [it for it in EARLY_POSTERIOR_ITERS_REQUESTED
+                             if it in CALIB_ITERS]
+
     # ---- 2.1 posterior snapshots -------------------------------------------
-    if DIM == 1 and PREDICTIONS_AVAILABLE and POSTERIOR_ITERS:
+    # The snapshot figure is built by a helper parameterized by the iteration
+    # set, figure name and title, so the default and the "early" variants reuse
+    # the same drawing code.
+    def _init_posterior_1d(method: str, X_test: np.ndarray, order: np.ndarray):
+        """Posterior of the t=0 model (GP fit on the initial design only).
+
+        Reconstructs the GP that run.py fits at the first BO step: RIGHT trains
+        on raw ``y_obs``, WRONG on ``|y_obs - T|`` (both with the benchmark's
+        fixed noise and the configured kernel).  Returns ``(mu, sd)`` on the
+        sorted test grid, or ``None`` when the initial design for POSTERIOR_SEED
+        is not available in the raw file.
+        """
+        if raw0 is None or raw0.get("metadata", {}).get("seed") != POSTERIOR_SEED:
+            return None
+        X0 = np.asarray(raw0["initial_design"]["X"], dtype=float)
+        y0 = np.asarray(raw0["initial_design"]["y_obs"], dtype=float)
+        Y0 = np.abs(y0 - T) if "wrong" in method else y0
+        kernel = str(config.get("model", {}).get("kernel", "matern52"))
+        builder = GPModelBuilder(
+            GPModelConfig(noise_std=benchmark.default_noise_std, kernel=kernel)
+        )
+        model = builder.fit(
+            torch.as_tensor(X0, dtype=torch.double),
+            torch.as_tensor(Y0, dtype=torch.double).reshape(-1, 1),
+        )
+        mean, var = builder.predict(model, torch.as_tensor(X_test, dtype=torch.double))
+        mu = mean.reshape(-1).detach().cpu().numpy()[order]
+        sd = var.clamp_min(1e-12).sqrt().reshape(-1).detach().cpu().numpy()[order]
+        return mu, sd
+
+    def _posterior_evolution_1d(iters: list[int], fig_name: str, title: str,
+                                include_init: bool = False) -> None:
         record = seed_record_for(POSTERIOR_SEED)
         X_test, f_test = reconstruct_test_grid()
         x_test = X_test.reshape(-1)
         order = np.argsort(x_test)
 
+        # Columns: an optional t=0 "init" model, then the requested iterations.
+        cols: list = (["init"] if include_init else []) + list(iters)
+
         n_rows = len(methods) + 1
         fig, axes = plt.subplots(
-            n_rows, len(POSTERIOR_ITERS),
-            figsize=(2.6 * len(POSTERIOR_ITERS), 2.6 * n_rows),
+            n_rows, len(cols),
+            figsize=(2.6 * len(cols), 2.6 * n_rows),
             sharex=True,
         )
         axes = np.atleast_2d(axes)
-        acq_by_iter: dict = {}
+        acq_by_col: dict = {}
 
         for i, method in enumerate(methods):
             style = style_for(method)
             truth = modelled_truth(method, f_test)
-            for j, it in enumerate(POSTERIOR_ITERS):
+            for j, col in enumerate(cols):
                 ax = axes[i, j]
-                cal = calibration_at(record, method, it)
-                pred = cal.get("predictions") if cal else None
-                if not pred:
-                    ax.text(0.5, 0.5, f"no predictions\nat t={it}",
-                            transform=ax.transAxes, ha="center", va="center")
-                    ax.set_axis_off()
-                    continue
-                mu = np.asarray(pred["posterior_mean"]).reshape(-1)[order]
-                sd = np.asarray(pred["posterior_std"]).reshape(-1)[order]
+                if col == "init":
+                    init = _init_posterior_1d(method, X_test, order)
+                    if init is None:
+                        ax.text(0.5, 0.5, "no initial\ndesign",
+                                transform=ax.transAxes, ha="center", va="center")
+                        ax.set_axis_off()
+                        continue
+                    mu, sd = init
+                else:
+                    cal = calibration_at(record, method, col)
+                    pred = cal.get("predictions") if cal else None
+                    if not pred:
+                        ax.text(0.5, 0.5, f"no predictions\nat t={col}",
+                                transform=ax.transAxes, ha="center", va="center")
+                        ax.set_axis_off()
+                        continue
+                    mu = np.asarray(pred["posterior_mean"]).reshape(-1)[order]
+                    sd = np.asarray(pred["posterior_std"]).reshape(-1)[order]
                 xo = x_test[order]; yo = truth[order]
                 ax.fill_between(xo, mu - 2 * sd, mu + 2 * sd, color=style["color"],
                                 alpha=0.20, label=r"$\mu \pm 2\sigma$")
@@ -378,20 +430,20 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
                 ax.plot(xo, yo, color="black", lw=1.0, ls="--", label="modelled truth")
                 ax.axhline(T if "wrong" not in method else 0.0,
                            color="#2ca02c", ls=":", lw=1.0)
-                acq_by_iter[(method, it)] = (xo, reconstruct_acquisition(method, mu, sd))
+                acq_by_col[(method, col)] = (xo, reconstruct_acquisition(method, mu, sd))
                 if i == 0:
-                    ax.set_title(f"$t = {it}$")
+                    ax.set_title("init ($t = 0$)" if col == "init" else f"$t = {col}$")
                 if j == 0:
                     ax.set_ylabel(style["label"])
 
         acq_row = len(methods)
-        for j, it in enumerate(POSTERIOR_ITERS):
+        for j, col in enumerate(cols):
             ax = axes[acq_row, j]
             for method in methods:
-                if (method, it) not in acq_by_iter:
+                if (method, col) not in acq_by_col:
                     continue
                 style = style_for(method)
-                xo, acq = acq_by_iter[(method, it)]
+                xo, acq = acq_by_col[(method, col)]
                 ax.plot(xo, acq, color=style["color"], lw=1.4, label=style["label"])
                 k = int(np.argmax(acq))
                 ax.scatter(xo[k], acq[k], color=style["color"], s=20, zorder=3)
@@ -407,11 +459,11 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         unique = dict(zip(labels, handles))
         fig.legend(unique.values(), unique.keys(), loc="lower center",
                    ncol=min(len(unique), 5), bbox_to_anchor=(0.5, -0.01), frameon=False)
-        fig.suptitle(f"Posterior and acquisition evolution (seed {POSTERIOR_SEED})")
+        fig.suptitle(title)
         fig.tight_layout(rect=(0, 0.04, 1, 0.97))
-        add_figure("02_posterior_and_acquisition_evolution", fig)
+        add_figure(fig_name, fig)
 
-    elif DIM == 2 and PREDICTIONS_AVAILABLE and POSTERIOR_ITERS and raw0 is not None:
+    def _acquisition_evolution_2d(iters: list[int], fig_name: str, title: str) -> None:
         record = seed_record_for(POSTERIOR_SEED)
         X_test, f_test = reconstruct_test_grid()
         X_test = np.asarray(X_test)
@@ -421,7 +473,7 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         eps = config["near_target_epsilon"]
         X0 = np.asarray(raw0["initial_design"]["X"])
         n0 = len(X0)
-        plot_cols = ["init"] + list(POSTERIOR_ITERS)
+        plot_cols = ["init"] + list(iters)
 
         fig, axes = plt.subplots(len(methods), len(plot_cols),
                                  figsize=(3.0 * len(plot_cols), 3.0 * len(methods)),
@@ -510,10 +562,41 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
                     cbar = fig.colorbar(cf, ax=ax, shrink=0.85)
                     cbar.set_label(r"$\alpha(x)$")
 
-        fig.suptitle(f"Acquisition evolution on test grid (seed {POSTERIOR_SEED})")
+        fig.suptitle(title)
         fig.tight_layout(rect=(0, 0.03, 1, 0.96))
-        add_figure("02_acquisition_evolution_2d", fig)
+        add_figure(fig_name, fig)
 
+    # Dispatch: default snapshot set, then the "early" set right after it so the
+    # figures are saved (and appear) consecutively.
+    if DIM == 1 and PREDICTIONS_AVAILABLE and (POSTERIOR_ITERS or EARLY_POSTERIOR_ITERS):
+        if POSTERIOR_ITERS:
+            _posterior_evolution_1d(
+                POSTERIOR_ITERS,
+                "02_posterior_and_acquisition_evolution",
+                f"Posterior and acquisition evolution (seed {POSTERIOR_SEED})",
+            )
+        if EARLY_POSTERIOR_ITERS:
+            _posterior_evolution_1d(
+                EARLY_POSTERIOR_ITERS,
+                "02b_early_posterior_and_acquisition_evolution",
+                f"Early posterior and acquisition evolution (seed {POSTERIOR_SEED})",
+                include_init=True,
+            )
+    elif DIM == 2 and PREDICTIONS_AVAILABLE and raw0 is not None and (
+        POSTERIOR_ITERS or EARLY_POSTERIOR_ITERS
+    ):
+        if POSTERIOR_ITERS:
+            _acquisition_evolution_2d(
+                POSTERIOR_ITERS,
+                "02_acquisition_evolution_2d",
+                f"Acquisition evolution on test grid (seed {POSTERIOR_SEED})",
+            )
+        if EARLY_POSTERIOR_ITERS:
+            _acquisition_evolution_2d(
+                EARLY_POSTERIOR_ITERS,
+                "02b_early_acquisition_evolution_2d",
+                f"Early acquisition evolution on test grid (seed {POSTERIOR_SEED})",
+            )
     else:
         logger.info(
             "single-seed mechanism plot skipped "
