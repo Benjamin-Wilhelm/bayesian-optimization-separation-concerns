@@ -163,6 +163,227 @@ def gaussian_nlpd(
     return float(np.mean(nlpd_per_point))
 
 
+# ---------------------------------------------------------------------------
+# Folded-normal pushforward diagnostics for the target-decision quantity g=|f-T|
+# ---------------------------------------------------------------------------
+#
+# The RIGHT method models the latent function ``f`` with a Gaussian posterior
+# ``F ~ N(mu_f, s_f^2)``.  The decision-relevant quantity is ``g = |f - T|``.
+# The distribution of ``G = |F - T|`` is a *folded normal*: for ``z >= 0``
+#
+#     p(z) = (1/s) phi((z - m)/s) + (1/s) phi((z + m)/s),   m = mu_f - T,
+#
+# and ``p(z) = 0`` for ``z < 0``.  This is the correct pushforward of the RIGHT
+# posterior onto the decision variable, and is what makes RIGHT's NLPD directly
+# comparable with WRONG's (which already predicts ``g`` directly).
+
+
+def folded_normal_logpdf(
+    z: ArrayLike,
+    loc: ArrayLike,
+    scale: ArrayLike,
+    eps: float = 1e-12,
+) -> np.ndarray:
+    r"""Log-density of :math:`G = |X|` with :math:`X \sim \mathcal N(\mathrm{loc},
+    \mathrm{scale}^2)`, evaluated at ``z``.
+
+    Numerically stable ``logsumexp`` over the two mirror branches:
+
+    .. math::
+
+        \log p(z) = -\log(\mathrm{scale}) - \tfrac12\log(2\pi)
+            + \operatorname{logsumexp}\!\left[
+                -\tfrac12\left(\tfrac{z-\mathrm{loc}}{\mathrm{scale}}\right)^2,\;
+                -\tfrac12\left(\tfrac{z+\mathrm{loc}}{\mathrm{scale}}\right)^2
+              \right].
+
+    ``loc`` is the *pre-folding* mean (e.g. ``mu_f - T``), not ``|mu_f - T|``.
+    Density is zero (log ``-inf``) for ``z < 0``.
+
+    Args:
+        z: Points at which to evaluate the density, shape ``(n,)``.
+        loc: Pre-folding mean(s), shape ``(n,)`` or scalar.
+        scale: Pre-folding standard deviation(s), shape ``(n,)`` or scalar.
+        eps: Minimum value to clamp ``scale``.
+
+    Returns:
+        Array of shape ``(n,)`` — log densities (``-inf`` where ``z < 0``).
+    """
+    z = _to_numpy_1d(z, "z")
+    m = _to_numpy_1d(loc, "loc")
+    s = np.maximum(_to_numpy_1d(scale, "scale"), eps)
+    a = -0.5 * ((z - m) / s) ** 2
+    b = -0.5 * ((z + m) / s) ** 2
+    mx = np.maximum(a, b)                       # logsumexp over the two branches
+    log_mix = mx + np.log(np.exp(a - mx) + np.exp(b - mx))
+    logpdf = -np.log(s) - 0.5 * math.log(2.0 * math.pi) + log_mix
+    return np.where(z < 0.0, -np.inf, logpdf)
+
+
+def folded_normal_nlpd(
+    z_true: ArrayLike,
+    loc: ArrayLike,
+    scale: ArrayLike,
+    eps: float = 1e-12,
+) -> float:
+    """Mean NLPD of the folded-normal pushforward (see :func:`folded_normal_logpdf`).
+
+    Args:
+        z_true: Observed non-negative decision values ``|f - T|``, shape ``(n,)``.
+        loc: Pre-folding mean(s) ``mu_f - T``.
+        scale: Pre-folding std(s) (``s_f`` for the latent variant, or
+            ``sqrt(s_f^2 + sigma_eta^2)`` for the noisy-observation variant).
+        eps: Minimum std clamp.
+
+    Returns:
+        Scalar float — mean NLPD across all ``n`` points.
+    """
+    return float(-np.mean(folded_normal_logpdf(z_true, loc, scale, eps=eps)))
+
+
+def folded_normal_cdf(
+    z: ArrayLike,
+    loc: ArrayLike,
+    scale: ArrayLike,
+    eps: float = 1e-12,
+) -> np.ndarray:
+    r"""CDF of the folded normal :math:`P(|X| \le z)` for ``X ~ N(loc, scale^2)``.
+
+    :math:`P(|X| \le z) = \Phi((z-\mathrm{loc})/s) + \Phi((z+\mathrm{loc})/s) - 1`
+    for ``z >= 0``, clamped to ``[0, 1]``.
+    """
+    z = _to_numpy_1d(z, "z")
+    m = _to_numpy_1d(loc, "loc")
+    s = np.maximum(_to_numpy_1d(scale, "scale"), eps)
+    if _SCIPY_AVAILABLE:
+        Phi = _scipy_stats.norm.cdf
+    else:
+        Phi = np.vectorize(_normal_cdf)
+    cdf = Phi((z - m) / s) + Phi((z + m) / s) - 1.0
+    return np.clip(np.where(z < 0.0, 0.0, cdf), 0.0, 1.0)
+
+
+def folded_normal_coverage(
+    z_true: ArrayLike,
+    loc: ArrayLike,
+    scale: ArrayLike,
+    level: float = 0.95,
+    eps: float = 1e-12,
+) -> float:
+    r"""Empirical coverage of the equal-tailed folded-normal credible interval.
+
+    Uses the *pushforward* quantiles ``[Q(alpha/2), Q(1-alpha/2)]`` of the
+    folded law — **not** the naive Gaussian interval ``|mu - T| +/- z*s``, which
+    is not a valid credible interval for the (asymmetric, zero-bounded, possibly
+    bimodal) folded distribution.
+
+    Args:
+        z_true: Observed non-negative decision values ``|f - T|``, shape ``(n,)``.
+        loc: Pre-folding mean(s) ``mu_f - T``.
+        scale: Pre-folding std(s).
+        level: Nominal coverage level, e.g. ``0.95``.
+        eps: Minimum std clamp.
+
+    Returns:
+        Scalar float in ``[0, 1]`` — fraction of ``z_true`` inside the interval.
+    """
+    zt = _to_numpy_1d(z_true, "z_true")
+    m = _to_numpy_1d(loc, "loc")
+    s = np.maximum(_to_numpy_1d(scale, "scale"), eps)
+    m, s = np.broadcast_arrays(m, s)
+    p_lo, p_hi = (1.0 - level) / 2.0, (1.0 + level) / 2.0
+    if _SCIPY_AVAILABLE:
+        c = np.abs(m) / s                       # foldnorm shape parameter
+        lo = _scipy_stats.foldnorm.ppf(p_lo, c, loc=0.0, scale=s)
+        hi = _scipy_stats.foldnorm.ppf(p_hi, c, loc=0.0, scale=s)
+    else:
+        lo = _folded_normal_ppf_bisect(p_lo, m, s)
+        hi = _folded_normal_ppf_bisect(p_hi, m, s)
+    return float(np.mean((zt >= lo) & (zt <= hi)))
+
+
+def _folded_normal_ppf_bisect(
+    p: float, loc: np.ndarray, scale: np.ndarray, iters: int = 60
+) -> np.ndarray:
+    """Vectorised bisection inverse of :func:`folded_normal_cdf` (scipy fallback)."""
+    hi = np.abs(loc) + 40.0 * scale            # generous upper bracket
+    lo = np.zeros_like(hi)
+    for _ in range(iters):
+        mid = 0.5 * (lo + hi)
+        cdf_mid = folded_normal_cdf(mid, loc, scale)
+        too_low = cdf_mid < p
+        lo = np.where(too_low, mid, lo)
+        hi = np.where(too_low, hi, mid)
+    return 0.5 * (lo + hi)
+
+
+def decision_g_calibration(
+    *,
+    method_kind: str,
+    mean: ArrayLike,
+    std_latent: ArrayLike,
+    f_true: ArrayLike,
+    target: float,
+    z_obs: Optional[ArrayLike] = None,
+    obs_noise_var: float = 0.0,
+    level: float = 0.95,
+) -> dict:
+    r"""NLPD / coverage on the decision quantity ``g = |f - T|``, comparable
+    across RIGHT and WRONG.
+
+    Both methods are evaluated **on the same variable** ``g`` (and, optionally,
+    on the transformed noisy observation ``Z = |f + eta - T|``):
+
+    - ``method_kind == "right"`` — the GP models ``f``.  The predictive on ``g``
+      is the folded-normal pushforward of ``N(mu_f, s_f^2)`` (latent) or
+      ``N(mu_f, s_f^2 + sigma_eta^2)`` (observation).
+    - ``method_kind == "wrong"`` — the GP models ``g`` directly, so its
+      predictive on ``g`` is Gaussian ``N(mu_g, s_g^2)`` (latent) or
+      ``N(mu_g, s_g^2 + sigma_g^2)`` (observation).
+
+    Args:
+        method_kind: ``"right"`` or ``"wrong"``.
+        mean: Raw-space posterior mean — ``mu_f`` (RIGHT) or ``mu_g`` (WRONG).
+        std_latent: Raw-space *latent* posterior std ``s`` (no observation noise).
+        f_true: Latent ``f(x)`` at the test points (used to form ``g=|f-T|``).
+        target: Target ``T``.
+        z_obs: Noisy transformed observations ``|f + eta - T|``.  When ``None``,
+            only the latent-``g`` metrics are returned.
+        obs_noise_var: Observation-noise variance ``sigma^2`` (raw space) added
+            before folding for the observation-``Z`` metrics.
+        level: Nominal coverage level.
+
+    Returns:
+        Dict with ``nlpd_g``/``coverage_g`` and (when ``z_obs`` is given)
+        ``nlpd_g_obs``/``coverage_g_obs``.
+    """
+    mu = _to_numpy_1d(mean, "mean")
+    s = _to_numpy_1d(std_latent, "std_latent")
+    f = _to_numpy_1d(f_true, "f_true")
+    g_true = np.abs(f - float(target))
+    s_total = np.sqrt(s ** 2 + max(float(obs_noise_var), 0.0))
+
+    out: dict[str, Any] = {}
+    if method_kind == "right":
+        loc = mu - float(target)               # pre-folding mean mu_f - T
+        out["nlpd_g"] = folded_normal_nlpd(g_true, loc, s)
+        out["coverage_g"] = folded_normal_coverage(g_true, loc, s, level=level)
+        if z_obs is not None:
+            zt = _to_numpy_1d(z_obs, "z_obs")
+            out["nlpd_g_obs"] = folded_normal_nlpd(zt, loc, s_total)
+            out["coverage_g_obs"] = folded_normal_coverage(zt, loc, s_total, level=level)
+    elif method_kind == "wrong":
+        out["nlpd_g"] = gaussian_nlpd(g_true, mu, std=s)
+        out["coverage_g"] = empirical_coverage(g_true, mu, std=s, level=level)
+        if z_obs is not None:
+            zt = _to_numpy_1d(z_obs, "z_obs")
+            out["nlpd_g_obs"] = gaussian_nlpd(zt, mu, std=s_total)
+            out["coverage_g_obs"] = empirical_coverage(zt, mu, std=s_total, level=level)
+    else:
+        raise ValueError(f"method_kind must be 'right' or 'wrong', got {method_kind!r}.")
+    return out
+
+
 def standardized_residuals(
     y_true: ArrayLike,
     mean: ArrayLike,
@@ -683,6 +904,13 @@ def build_calibration_report_dict(
     store_predictions: bool = True,
     level: float = 0.95,
     beta: float = 2.0,
+    method_kind: Optional[str] = None,
+    target: Optional[float] = None,
+    f_true_global: Optional[ArrayLike] = None,
+    f_true_near: Optional[ArrayLike] = None,
+    z_obs_global: Optional[ArrayLike] = None,
+    z_obs_near: Optional[ArrayLike] = None,
+    obs_noise_var: float = 0.0,
 ) -> dict[str, Any]:
     """Compute all calibration diagnostics for one GP at one snapshot.
 
@@ -693,12 +921,22 @@ def build_calibration_report_dict(
           "global_calibration": dict,        # from calibration_summary on X_global
           "near_target":        dict | None, # from calibration_summary on X_near + epsilon/n_test + joint_* keys
           "joint_posterior":    dict | None, # from posterior_joint_calibration_summary on X_global[:m_glob]
+          "decision_g":         dict | None, # NLPD/coverage on g=|f-T|, comparable across methods
+          "decision_g_near":    dict | None, # same, restricted to the near-target grid
           "predictions":        dict | None, # posterior_mean/posterior_std on X_global
         }
 
     The caller is responsible for passing the correct ``y_true`` for each
     grid: ``f(X)`` for the RIGHT method, ``|f(X) - T|`` for WRONG.  This keeps
     decision-specific transforms out of :mod:`common.diagnostics`.
+
+    The ``decision_g`` / ``decision_g_near`` blocks are populated only when
+    ``method_kind`` (``"right"``/``"wrong"``), ``target`` and ``f_true_global``
+    are supplied; they score BOTH methods on the shared decision variable
+    ``g = |f - T|`` (see :func:`decision_g_calibration`) and are the only NLPD
+    figures that may be compared directly between RIGHT and WRONG.  Pass
+    ``z_obs_*`` and ``obs_noise_var`` to additionally get the transformed-
+    observation metrics ``nlpd_g_obs`` / ``coverage_g_obs``.
     """
     mean_global, std_global = posterior_predictions(model, X_global)
 
@@ -769,6 +1007,41 @@ def build_calibration_report_dict(
             if "error" in near_joint:
                 near_calib["joint_error"] = str(near_joint["error"])
 
+    # Decision-quantity (g = |f - T|) calibration.  Unlike ``global_calibration``
+    # / ``near_target`` — which score each method on the variable it natively
+    # models (``f`` for RIGHT, ``g`` for WRONG) and are therefore NOT comparable
+    # across methods — these blocks score BOTH methods on the same variable
+    # ``g``, so ``nlpd_g`` is directly comparable between RIGHT and WRONG.
+    decision_g_global: Optional[dict[str, Any]] = None
+    decision_g_near: Optional[dict[str, Any]] = None
+    if method_kind is not None and target is not None and f_true_global is not None:
+        decision_g_global = decision_g_calibration(
+            method_kind=method_kind,
+            mean=mean_global.cpu().numpy(),
+            std_latent=std_global.cpu().numpy(),
+            f_true=f_true_global,
+            target=float(target),
+            z_obs=z_obs_global,
+            obs_noise_var=obs_noise_var,
+            level=level,
+        )
+        if (
+            compute_near_target
+            and X_near is not None
+            and f_true_near is not None
+        ):
+            mean_near2, std_near2 = posterior_predictions(model, X_near)
+            decision_g_near = decision_g_calibration(
+                method_kind=method_kind,
+                mean=mean_near2.cpu().numpy(),
+                std_latent=std_near2.cpu().numpy(),
+                f_true=f_true_near,
+                target=float(target),
+                z_obs=z_obs_near,
+                obs_noise_var=obs_noise_var,
+                level=level,
+            )
+
     predictions: Optional[dict[str, Any]] = None
     if store_predictions:
         predictions = {
@@ -780,5 +1053,7 @@ def build_calibration_report_dict(
         "global_calibration": global_calib,
         "near_target":        near_calib,
         "joint_posterior":    joint_post,
+        "decision_g":         decision_g_global,
+        "decision_g_near":    decision_g_near,
         "predictions":        predictions,
     }

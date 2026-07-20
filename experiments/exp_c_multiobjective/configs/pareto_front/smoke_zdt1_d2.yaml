@@ -43,7 +43,10 @@ model:
 
 acquisition:
   type: ucb
-  beta: 8.0
+  beta_schedule:
+    type: log
+    beta0: 8.0
+    c: 1.0
   raw_samples: 64
   num_restarts: 3
 

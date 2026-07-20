@@ -272,6 +272,9 @@ def _calibration_reports(
     m_test_joint_distrib: Optional[int] = None,
     m_test_joint_near_target: Optional[int] = None,
     joint_nlpd_jitter: float = 1e-6,
+    z_obs_global: Optional[torch.Tensor] = None,
+    z_obs_near: Optional[torch.Tensor] = None,
+    obs_noise_var: float = 0.0,
 ) -> list[CalibrationReport]:
     """Held-out calibration at selected GP snapshots.
 
@@ -295,6 +298,12 @@ def _calibration_reports(
         if f_near is not None
         else None
     )
+
+    # Decision-quantity (g = |f - T|) inputs: shared across methods, evaluated
+    # on the latent f (for g_true) and the noisy transformed observation z_obs.
+    method_kind = "right" if method.train_label == "y_obs" else "wrong"
+    f_true_global = f_global.squeeze(-1)
+    f_true_near = f_near
 
     reports: list[CalibrationReport] = []
     for snapshot in method.model_snapshots:
@@ -325,6 +334,13 @@ def _calibration_reports(
             m_test_joint_near_target=m_test_joint_near_target,
             joint_nlpd_jitter=joint_nlpd_jitter,
             store_predictions=store_predictions,
+            method_kind=method_kind,
+            target=target,
+            f_true_global=f_true_global,
+            f_true_near=f_true_near,
+            z_obs_global=z_obs_global,
+            z_obs_near=z_obs_near,
+            obs_noise_var=obs_noise_var,
         )
 
         predictions = (
@@ -338,6 +354,8 @@ def _calibration_reports(
                 global_calibration=artifacts["global_calibration"],
                 near_target=artifacts["near_target"],
                 joint_posterior=artifacts["joint_posterior"],
+                decision_g=artifacts.get("decision_g"),
+                decision_g_near=artifacts.get("decision_g_near"),
                 predictions=predictions,
             )
         )
@@ -466,6 +484,25 @@ def _process_one_seed(
         ).to(device)
         f_near = problem.f(X_near).squeeze(-1)
 
+    # Noisy transformed observations Z = |f + eta - T| on the (near-)test grid,
+    # for the decision-quantity NLPD of the *transformed observation* variant.
+    # Drawn once per seed with a deterministic generator (fixed by the test-grid
+    # seed) and shared verbatim across methods, so RIGHT and WRONG are scored on
+    # the SAME z realisations.  noise_std is the true benchmark observation noise.
+    noise_std = float(raw.metadata.noise_std or 0.0)
+    obs_noise_var = noise_std ** 2
+    _noise_gen = torch.Generator(device="cpu").manual_seed(test_grid_seed * 100003 + 7)
+    eta_global = torch.randn(
+        f_test.shape, generator=_noise_gen, dtype=torch.double
+    ) * noise_std
+    z_obs_global = (f_test + eta_global.to(device) - target).abs().squeeze(-1)
+    z_obs_near: Optional[torch.Tensor] = None
+    if f_near is not None:
+        eta_near = torch.randn(
+            f_near.shape, generator=_noise_gen, dtype=torch.double
+        ) * noise_std
+        z_obs_near = (f_near + eta_near.to(device) - target).abs()
+
     # Oracle.  Synthetic benchmarks can override; default returns None,
     # in which case we treat the simple regret as min_t |f - T| - 0.
     oracle = problem.oracle_target_distance(target)
@@ -504,6 +541,9 @@ def _process_one_seed(
             m_test_joint_distrib=m_test_joint_distrib,
             m_test_joint_near_target=m_test_joint_near_target,
             joint_nlpd_jitter=joint_nlpd_jitter,
+            z_obs_global=z_obs_global,
+            z_obs_near=z_obs_near,
+            obs_noise_var=obs_noise_var,
         )
         methods[name] = MethodProcessed(
             method_name=name,

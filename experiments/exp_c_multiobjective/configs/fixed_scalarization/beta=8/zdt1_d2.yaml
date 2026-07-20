@@ -1,11 +1,12 @@
-# Experiment C — fixed scalarization.  ZDT2 (input_dim=2) has a concave (has NON-supported points): linear scalarization
-# CANNOT reach the interior of the front.  A coverage gap there is a
-# limitation of the linear scalarization family, NOT of RIGHT vs WRONG.
+# Experiment C — fixed scalarization on ZDT1 (input_dim = 2).
+# ZDT1 has a convex (fully supported) front: linear scalarization can reach
+# every point of it.  RIGHT vs WRONG differ only in WHERE the scalarization
+# is applied.
 experiment_mode: fixed_scalarization
-tag: zdt2_d2
+tag: zdt1_d2_beta8
 
 benchmark:
-  name: zdt2
+  name: zdt1
   input_dim: 2
   orientation: maximize
   normalization: fixed
@@ -37,7 +38,9 @@ model:
 
 acquisition:
   type: ucb
-  beta: 8.0
+  beta_schedule:
+    type: constant
+    value: 8.0
   raw_samples: 1024
   num_restarts: 20
 

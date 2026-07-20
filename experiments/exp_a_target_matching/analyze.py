@@ -109,6 +109,19 @@ _CALIB_JOINT_KEYS: list[str] = [
     "logdet",
 ]
 
+# Decision-quantity (g = |f - T|) scalars.  Unlike the ``nlpd`` in
+# ``global_calibration`` / ``near_target`` — which scores each method on the
+# variable it natively models (f for RIGHT, g for WRONG) and is therefore NOT
+# comparable across methods — these score BOTH methods on g, so ``nlpd_g`` is
+# directly comparable between RIGHT and WRONG.  ``*_obs`` variants score the
+# transformed noisy observation Z = |f + eta - T| (predictive var s^2 + sigma^2).
+_CALIB_DECISION_G_KEYS: list[str] = [
+    "nlpd_g",
+    "coverage_g",
+    "nlpd_g_obs",
+    "coverage_g_obs",
+]
+
 # Standardized-residual calibration scalars.  These are the only calibration
 # curves that may use a *uniform* (simultaneous) bootstrap band: a single
 # excursion along the checkpoints should not be over-interpreted.  All other
@@ -359,6 +372,18 @@ def _build_calibration_summary(
                 )
                 for key in _CALIB_JOINT_KEYS
             },
+            "decision_g": {
+                key: _maybe_summary(
+                    _stack_calibration(seeds, m, "decision_g", key)
+                )
+                for key in _CALIB_DECISION_G_KEYS
+            },
+            "decision_g_near": {
+                key: _maybe_summary(
+                    _stack_calibration(seeds, m, "decision_g_near", key)
+                )
+                for key in _CALIB_DECISION_G_KEYS
+            },
         }
     return out
 
@@ -543,6 +568,8 @@ def _build_calibration_curves(
             "global_calibration": _agg_level(m, "global_calibration", global_keys),
             "near_target":        _agg_level(m, "near_target", near_target_keys),
             "joint_posterior":    _agg_level(m, "joint_posterior", joint_keys),
+            "decision_g":         _agg_level(m, "decision_g", _CALIB_DECISION_G_KEYS),
+            "decision_g_near":    _agg_level(m, "decision_g_near", _CALIB_DECISION_G_KEYS),
         }
 
         out["methods"][m] = method_out

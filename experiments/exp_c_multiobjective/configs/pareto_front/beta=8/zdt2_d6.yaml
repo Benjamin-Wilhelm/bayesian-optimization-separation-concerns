@@ -1,0 +1,61 @@
+# Experiment C — Pareto-front approximation on ZDT2 (input_dim = 2).
+# Compares sharing a common posterior over F across preferences (RIGHT
+# Algorithm 1) against solving L independent scalarized problems
+# (RIGHT/WRONG Algorithm 2), at EQUAL global budget.
+experiment_mode: pareto_front
+tag: pf_zdt2_d2_beta8
+
+benchmark:
+  name: zdt2
+  input_dim: 2
+  orientation: maximize
+  normalization: fixed
+
+methods:
+  - right_algorithm_1
+  - right_algorithm_2
+  - wrong_algorithm_2
+
+scalarization: hypervolume
+
+lambda:
+  distribution: uniform_positive_sphere
+  n_scalarizations_algorithm_2: 10   # L; ablate with 5 / 10 / 20
+  evaluation_samples: 2048           # independent Bayes-regret preferences
+
+budget: 500                          # GLOBAL objective budget (Alg1 == Alg2)
+
+algorithm_1:
+  initial_design_size: 5
+
+algorithm_2:
+  initial_design_size_per_subrun: 2
+  schedule: round_robin
+  share_initial_design_across_runs: false
+
+seeds:
+  start: 1
+  end: 50
+
+noise:
+  std: 0.0
+
+model:
+  kernel: matern52
+
+acquisition:
+  type: ucb
+  beta_schedule:
+    type: constant
+    value: 8.0
+  raw_samples: 1024
+  num_restarts: 20
+
+reference:
+  pareto_front_resolution: 10000
+
+diagnostics:
+  save_posterior: false
+  save_acquisition: false
+
+device: cpu

@@ -812,19 +812,58 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         ax.set_xlabel("iteration $t$")
         return sample
 
-    # 4.2 NLPD
+    # 4.2 NLPD in each model's NATIVE space.
+    # WARNING: RIGHT scores f, WRONG scores g=|f-T| — these are NLPDs of
+    # DIFFERENT variables and are NOT comparable between methods.  Kept only as
+    # an intra-method diagnostic; the cross-method comparison is 04_nlpd_decision_g.
     fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.2))
     s1 = plot_cal_metric(axes[0], "global_calibration", "nlpd", logy=True)
-    axes[0].set_ylabel("NLPD (test grid)")
-    axes[0].set_title("NLPD on full test grid")
+    axes[0].set_ylabel("NLPD (native variable)")
+    axes[0].set_title("NLPD on full test grid\n(native variable: f for RIGHT, |f-T| for WRONG)")
     axes[0].legend(loc="best")
     s2 = plot_cal_metric(axes[1], "near_target", "nlpd", logy=True)
-    axes[1].set_ylabel("NLPD (near target)")
-    axes[1].set_title("NLPD near the target set")
+    axes[1].set_ylabel("NLPD (native variable)")
+    axes[1].set_title("NLPD near the target set\n(native variable -- not comparable across methods)")
     axes[1].legend(loc="best")
-    fig.suptitle("NLPD -- " + band_caption(s1 or s2, CAL_N))
+    fig.suptitle("NLPD in native model space (intra-method only) -- "
+                 + band_caption(s1 or s2, CAL_N))
     fig.tight_layout()
     add_figure("04_nlpd", fig)
+
+    # 4.2b NLPD on the shared decision quantity g = |f - T| (COMPARABLE).
+    # RIGHT uses the folded-normal pushforward of its posterior on f; WRONG uses
+    # its direct posterior on g.  Left: latent g.  Right: transformed noisy
+    # observation Z = |f + eta - T| (predictive variance s^2 + sigma_eta^2).
+    if any(has_cal(m, "decision_g", "nlpd_g") for m in methods):
+        fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.2))
+        sa = plot_cal_metric(axes[0], "decision_g", "nlpd_g", logy=True)
+        axes[0].set_ylabel(r"NLPD on $g=|f-T|$ (test grid)")
+        axes[0].set_title("Decision-quantity NLPD (latent $g$)")
+        axes[0].legend(loc="best")
+        sb = plot_cal_metric(axes[1], "decision_g", "nlpd_g_obs", logy=True)
+        axes[1].set_ylabel(r"NLPD on $Z=|f+\eta-T|$ (test grid)")
+        axes[1].set_title("Decision-quantity NLPD (transformed observation $Z$)")
+        axes[1].legend(loc="best")
+        fig.suptitle("Decision-quantity NLPD on $g$ (RIGHT-pushforward vs WRONG) -- "
+                     + band_caption(sa or sb, CAL_N))
+        fig.tight_layout()
+        add_figure("04_nlpd_decision_g", fig)
+
+        # Near-target variant, when available.
+        if any(has_cal(m, "decision_g_near", "nlpd_g") for m in methods):
+            fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.2))
+            sa = plot_cal_metric(axes[0], "decision_g_near", "nlpd_g", logy=True)
+            axes[0].set_ylabel(r"NLPD on $g=|f-T|$ (near target)")
+            axes[0].set_title("Near-target decision NLPD (latent $g$)")
+            axes[0].legend(loc="best")
+            sb = plot_cal_metric(axes[1], "decision_g_near", "nlpd_g_obs", logy=True)
+            axes[1].set_ylabel(r"NLPD on $Z=|f+\eta-T|$ (near target)")
+            axes[1].set_title("Near-target decision NLPD (transformed observation $Z$)")
+            axes[1].legend(loc="best")
+            fig.suptitle("Near-target decision-quantity NLPD on $g$ -- "
+                         + band_caption(sa or sb, CAL_N))
+            fig.tight_layout()
+            add_figure("04_nlpd_decision_g_near", fig)
 
     # 4.3 coverage / violation
     fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.2))

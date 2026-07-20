@@ -56,6 +56,7 @@ from common.hypervolume import (
 )
 from common.multi_objective_metrics import (
     empirical_bayes_regret,
+    reference_scalar_optimum,
     scalarized_regrets,
     scalarized_trajectory_values,
 )
@@ -63,6 +64,19 @@ from common.multi_objective_metrics import (
 logger = logging.getLogger("process_exp_c")
 
 _ATOL = 1e-6
+
+# Resolution of the analytic Pareto front used to RECOMPUTE the reference
+# scalar optimum rho* = max_x rho_lambda(F(x)) at process time.  The value
+# stored in the raw file was computed on a coarser front (default 10 000
+# points), which slightly under-estimates rho*; near-optimal BO queries can
+# then exceed it by ~1e-5 and trip the negative-regret guard.  The hypervolume
+# scalarization maxes out at a *kink* of the front, so the discretization error
+# shrinks as O(1/N) with grid-alignment jitter (not O(1/N^2)); empirically the
+# worst-case negative regret across all fixed benchmarks reaches exactly 0 at
+# 1e6 points (zdt1_d2: 200k -> -3.9e-6, 500k -> -6e-7, 1e6 -> 0).  rho* is a
+# pure evaluation reference and is not used by the BO loop, so recomputing it
+# here does not affect the scientific protocol of the runs.
+_FIXED_RHO_FRONT_RESOLUTION: int = 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +109,17 @@ def _process_fixed_seed(
     ref = benchmark.reference_point
     processed_cases: list[FixedCaseProcessed] = []
 
+    # Recompute rho* on a dense analytic front (see _FIXED_RHO_FRONT_RESOLUTION):
+    # the coarser rho* stored in the raw file under-estimates the true optimum
+    # and trips the negative-regret guard on near-optimal queries.
+    front_oriented = benchmark.true_pareto_front_oriented(_FIXED_RHO_FRONT_RESOLUTION)
+
     for case in raw.cases:
         lam = torch.tensor(case.lambda_vector, dtype=torch.double)
         scal = case.scalarization
-        rho_star = case.rho_star
+        rho_star = float(
+            reference_scalar_optimum(front_oriented, lam, scal, ref).item()
+        )
 
         init_X = torch.tensor(case.initial_X, dtype=torch.double)
         n_init = init_X.shape[0]

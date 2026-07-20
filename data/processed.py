@@ -234,6 +234,8 @@ class CalibrationReport:
     global_calibration: dict[str, Any]
     near_target: Optional[dict[str, Any]]
     joint_posterior: Optional[dict[str, Any]] = None
+    decision_g: Optional[dict[str, Any]] = None
+    decision_g_near: Optional[dict[str, Any]] = None
     predictions: Optional[CalibrationPredictionGrid] = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -242,6 +244,8 @@ class CalibrationReport:
             "global_calibration": self.global_calibration,
             "near_target": self.near_target,
             "joint_posterior": self.joint_posterior,
+            "decision_g": self.decision_g,
+            "decision_g_near": self.decision_g_near,
             "predictions": (
                 self.predictions.to_dict()
                 if self.predictions is not None
@@ -272,6 +276,8 @@ class CalibrationReport:
             global_calibration=global_calibration,
             near_target=d.get("near_target"),
             joint_posterior=d.get("joint_posterior"),
+            decision_g=d.get("decision_g"),
+            decision_g_near=d.get("decision_g_near"),
             predictions=predictions,
         )
 

@@ -1,0 +1,59 @@
+# Fast smoke config for the pareto-front pipeline (run -> process -> analyze).
+# Tiny budget / few seeds / few restarts.  Not a scientific run.
+experiment_mode: pareto_front
+tag: smoke_pf_zdt1_d2_beta8
+
+benchmark:
+  name: zdt1
+  input_dim: 2
+  orientation: maximize
+  normalization: fixed
+
+methods:
+  - right_algorithm_1
+  - right_algorithm_2
+  - wrong_algorithm_2
+
+scalarization: hypervolume
+
+lambda:
+  distribution: uniform_positive_sphere
+  n_scalarizations_algorithm_2: 3
+  evaluation_samples: 64
+
+budget: 12
+
+algorithm_1:
+  initial_design_size: 3
+
+algorithm_2:
+  initial_design_size_per_subrun: 2
+  schedule: round_robin
+  share_initial_design_across_runs: false
+
+seeds:
+  start: 1
+  end: 2
+
+noise:
+  std: 0.0
+
+model:
+  kernel: matern52
+
+acquisition:
+  type: ucb
+  beta_schedule:
+    type: constant
+    value: 8.0
+  raw_samples: 64
+  num_restarts: 3
+
+reference:
+  pareto_front_resolution: 2000
+
+diagnostics:
+  save_posterior: false
+  save_acquisition: false
+
+device: cpu

@@ -3,11 +3,11 @@
 # Algorithm 1) against solving L independent scalarized problems
 # (RIGHT/WRONG Algorithm 2), at EQUAL global budget.
 experiment_mode: pareto_front
-tag: pf_zdt2_d2
+tag: pf_zdt2_d6
 
 benchmark:
   name: zdt2
-  input_dim: 2
+  input_dim: 6
   orientation: maximize
   normalization: fixed
 
@@ -23,7 +23,7 @@ lambda:
   n_scalarizations_algorithm_2: 10   # L; ablate with 5 / 10 / 20
   evaluation_samples: 2048           # independent Bayes-regret preferences
 
-budget: 100                          # GLOBAL objective budget (Alg1 == Alg2)
+budget: 500                          # GLOBAL objective budget (Alg1 == Alg2)
 
 algorithm_1:
   initial_design_size: 5
@@ -45,7 +45,10 @@ model:
 
 acquisition:
   type: ucb
-  beta: 8.0
+  beta_schedule:
+    type: log
+    beta0: 8.0
+    c: 1.0
   raw_samples: 1024
   num_restarts: 20
 
