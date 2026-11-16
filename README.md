@@ -127,8 +127,8 @@ forward YAML normalization/standardization flags. `RBF/`, `MATERN_1_2/`,
 `ADAPTATIVE_LOG_BETA/`, and `ADAPTATIVE_MATERN_BETA/` provide alternative configs
 whose budgets and schedules can differ from the base configs.
 
-The main metric is target simple regret $\min_{s\le n}|f(x_s)-T|-d^*$, with
-$d^*=\min_x|f(x)-T|$ from the benchmark oracle, or zero if unavailable. Secondary
+The main metric is target simple regret $\min_{s\le n}|f(x_s)-T|-d^{*}$, with
+$d^{*}=\min_x|f(x)-T|$ from the benchmark oracle, or zero if unavailable. Secondary
 metrics include cumulative regret, AUC, hitting time and failure rate. Deterministic
 global/near-target grids support NLPD, coverage, PIT, residuals, bound violations
 and optional joint diagnostics. RIGHT's modeled quantity is $f$; WRONG's is
