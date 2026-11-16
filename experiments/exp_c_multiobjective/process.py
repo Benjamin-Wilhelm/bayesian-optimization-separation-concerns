@@ -61,6 +61,9 @@ from common.multi_objective_metrics import (
     scalarized_trajectory_values,
 )
 
+from common.pareto_diagnostics import (arc_length_reference, dominance_regret,
+                                       query_dominance_curves, running_igd)
+
 logger = logging.getLogger("process_exp_c")
 
 _ATOL = 1e-6
@@ -225,6 +228,12 @@ def _process_pareto_seed(
     hv_star = float(raw.hv_star)
     eval_lambdas = torch.tensor(raw.evaluation_lambdas, dtype=torch.double)
 
+    # Fixed unit scales: both ZDT analytical fronts span [0, 1] per objective.
+    if benchmark.name not in ("zdt1", "zdt2"):
+        raise ValueError("Specify fixed diagnostic scales for this benchmark")
+    scales = [1.0, 1.0]
+    diagnostic_reference = arc_length_reference(
+        benchmark.true_pareto_front_raw(10001).numpy(), scales, 1001)
     method_out: dict[str, ParetoMethodProcessed] = {}
     for name, method in raw.methods.items():
         evals = method.global_evaluations
@@ -244,6 +253,11 @@ def _process_pareto_seed(
         hv_regret = hypervolume_regret_2d(oriented, ref, hv_star)
         bayes = empirical_bayes_regret(oriented, front_oriented, eval_lambdas, scal, ref)
 
+        raw_y = benchmark.evaluate_raw(X).numpy()
+        diagnostic_curves = query_dominance_curves(
+            dominance_regret(raw_y, scales, analytical_front=benchmark.name))
+        diagnostic_curves["igd"] = running_igd(raw_y, scales, diagnostic_reference)
+
         method_out[name] = ParetoMethodProcessed(
             algorithm=method.algorithm,
             architecture=method.architecture,
@@ -252,6 +266,15 @@ def _process_pareto_seed(
             hypervolume_regret=hv_regret.tolist(),
             empirical_bayes_regret=bayes.tolist(),
             subruns=method.subruns,
+            diagnostics={
+                **{k: v.tolist() for k, v in diagnostic_curves.items()},
+                "objective_scales": scales, "orientation": "minimize",
+                "dominance_tolerance": 1e-8,
+                "reference_resolution": 1001, "reference_dense_resolution": 10001,
+                "reference_sampling": "uniform normalized arc length",
+                "dominance_reference": "continuous analytical ZDT front",
+                "budget_order": "stored global round-robin, initial design included",
+            },
         )
 
     return ProcessedParetoSeedData(

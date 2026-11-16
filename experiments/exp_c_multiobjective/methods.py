@@ -42,17 +42,18 @@ Tensor = torch.Tensor
 def make_gp_builder(config: dict[str, Any], noise_std: float) -> GPModelBuilder:
     """Build the shared :class:`GPModelBuilder` for one run.
 
-    Noise policy: a strictly positive ``noise.std`` with ``use_fixed_noise``
-    (default) yields a ``FixedNoiseGP`` with known variance; ``noise.std == 0``
-    uses an inferred-noise ``SingleTaskGP`` (avoids a degenerate zero-variance
-    ``FixedNoiseGP``).  Input normalization and outcome standardization are
+    Noise policy: ``model.use_fixed_noise`` defaults to True and selects
+    ``FixedNoiseGP``, including for noiseless observations. A minimum model
+    noise standard deviation of 1e-6 avoids exactly zero variance. Only
+    explicit False enables learned noise. GPyTorch may clamp tiny variances
+    further for numerical stability.  Input normalization and outcome standardization are
     internal GP transforms that never touch the scientific objective.
     """
     model_cfg = config.get("model", {}) or {}
     use_fixed_noise = bool(model_cfg.get("use_fixed_noise", True))
     gp_noise: Optional[float]
-    if noise_std and noise_std > 0.0 and use_fixed_noise:
-        gp_noise = float(noise_std)
+    if use_fixed_noise:
+        gp_noise = max(float(noise_std), 1e-6)
     else:
         gp_noise = None
     gp_config = GPModelConfig(

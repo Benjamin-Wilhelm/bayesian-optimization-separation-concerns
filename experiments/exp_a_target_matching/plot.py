@@ -1034,6 +1034,102 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         logger.info("near-target joint posterior diagnostics not available — skipping.")
 
     # ========================================================================
+    # 5. GP hyperparameters (ARD lengthscales, output scale, noise variance)
+    # ========================================================================
+    # The per-iteration GP hyperparameters live only in the RAW snapshots
+    # (process.py does not carry them into processed data).  We stream the raw
+    # seed files one at a time (state dicts are large), extract each snapshot's
+    # ``hyperparameters`` dict, and aggregate across seeds: median line + 25-75%
+    # inter-seed band.  One curve per method; the lengthscale panel draws one
+    # line per input dimension (ARD).
+    def _collect_gp_hparams(method: str) -> Optional[dict]:
+        ls_seeds, os_seeds, noise_seeds, iters_ref = [], [], [], None
+        for p in _raw_files:
+            rec = load_json(p)
+            snaps = rec.get("methods", {}).get(method, {}).get("model_snapshots")
+            if not snaps:
+                continue
+            snaps = sorted(snaps, key=lambda s: s["iteration"])
+            ls_rows, os_row, noise_row = [], [], []
+            for s in snaps:
+                hp = s.get("hyperparameters") or {}
+                ls = hp.get("lengthscale")
+                if ls is None:
+                    ls_rows.append([np.nan])
+                elif isinstance(ls, (list, tuple)):
+                    ls_rows.append([float(v) for v in ls])
+                else:
+                    ls_rows.append([float(ls)])
+                os_row.append(float(hp.get("outputscale", np.nan)))
+                noise_row.append(float(
+                    hp.get("noise_variance_raw",
+                           hp.get("noise_variance_standardized", np.nan))
+                ))
+            ls_seeds.append(np.asarray(ls_rows, dtype=float))    # (n_iter, dim)
+            os_seeds.append(np.asarray(os_row, dtype=float))     # (n_iter,)
+            noise_seeds.append(np.asarray(noise_row, dtype=float))
+            if iters_ref is None:
+                iters_ref = [int(s["iteration"]) for s in snaps]
+        if not ls_seeds:
+            return None
+        # Align to the shortest seed (defensive: budgets are equal in practice).
+        n_it = min(a.shape[0] for a in ls_seeds)
+        dim = min(a.shape[1] for a in ls_seeds)
+        return {
+            "iters": np.asarray(iters_ref[:n_it], dtype=float),
+            "lengthscale": np.stack([a[:n_it, :dim] for a in ls_seeds], axis=0),
+            "outputscale": np.stack([a[:n_it] for a in os_seeds], axis=0),
+            "noise": np.stack([a[:n_it] for a in noise_seeds], axis=0),
+            "dim": dim,
+        }
+
+    gp_hp = {m: _collect_gp_hparams(m) for m in methods}
+    if any(v is not None for v in gp_hp.values()):
+        def _median_band(a):
+            return (np.nanmedian(a, axis=0),
+                    np.nanpercentile(a, 25, axis=0),
+                    np.nanpercentile(a, 75, axis=0))
+
+        fig, axes = plt.subplots(1, 3, figsize=(15.5, 4.3))
+        for m in methods:
+            data = gp_hp.get(m)
+            if data is None:
+                continue
+            st = style_for(m)
+            col = st["color"]
+            it = data["iters"]
+            # Panel 0: ARD lengthscale, one line per input dim (median over seeds).
+            ls_med = np.nanmedian(data["lengthscale"], axis=0)   # (n_it, dim)
+            for d in range(data["dim"]):
+                axes[0].plot(it, ls_med[:, d], color=col, alpha=0.85, lw=1.6,
+                             label=st["label"] if d == 0 else None)
+            # Panel 1: kernel output scale (median + inter-seed band).
+            om, olo, ohi = _median_band(data["outputscale"])
+            axes[1].plot(it, om, color=col, lw=2.0, label=st["label"])
+            axes[1].fill_between(it, olo, ohi, color=col, alpha=0.18, lw=0)
+            # Panel 2: observation-noise variance on the raw scale.
+            nm, nlo, nhi = _median_band(data["noise"])
+            axes[2].plot(it, nm, color=col, lw=2.0, label=st["label"])
+            axes[2].fill_between(it, nlo, nhi, color=col, alpha=0.18, lw=0)
+
+        axes[0].set_yscale("log")
+        axes[0].set_xlabel("iteration $t$"); axes[0].set_ylabel("lengthscale")
+        axes[0].set_title("ARD lengthscales (one line / input dim)\nmedian over seeds")
+        axes[1].set_yscale("log")
+        axes[1].set_xlabel("iteration $t$"); axes[1].set_ylabel("output scale")
+        axes[1].set_title("Kernel output scale\nmedian, 25-75% inter-seed band")
+        axes[2].set_yscale("log")
+        axes[2].set_xlabel("iteration $t$"); axes[2].set_ylabel("noise variance (raw)")
+        axes[2].set_title("Observation-noise variance (raw scale)\nmedian, 25-75% inter-seed band")
+        for ax in axes:
+            ax.legend(loc="best")
+        fig.suptitle(f"GP hyperparameters vs BO iteration -- aggregated over {len(_raw_files)} seeds")
+        fig.tight_layout()
+        add_figure("05_gp_hyperparameters", fig)
+    else:
+        logger.info("no GP snapshots with hyperparameters found — skipping 05_gp_hyperparameters.")
+
+    # ========================================================================
     # Save all figures
     # ========================================================================
     _clear_stale_figures(FIG_DIR)

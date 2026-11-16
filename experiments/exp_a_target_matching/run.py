@@ -94,7 +94,9 @@ _METHOD_SPECS: dict[str, dict[str, Any]] = {
         "transform":   _abs_minus_target,
         "acq_builder": _build_wrong_acq,
         # Noise on |y_obs - T| is folded near the target and is not simply
-        # Gaussian; let the GP infer it.
+        # Gaussian; However, our experiment focus first on the effect of the transformation.
+        # Noise is then set to 0 and we do not infer it.
+        # To study the effect of noise, one could try both to infer noise and not to, to analyze this effect.
         "use_fixed_noise": True,
     },
 }

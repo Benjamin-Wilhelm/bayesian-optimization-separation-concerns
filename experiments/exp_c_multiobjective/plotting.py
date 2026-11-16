@@ -78,6 +78,7 @@ def curve_with_band(
     label: Optional[str],
     statistic: str = "median",
     pct: tuple[float, float] = (25.0, 75.0),
+    show_mean: bool = True,
 ) -> None:
     """Plot a central curve + inter-seed percentile band.
 
@@ -91,6 +92,9 @@ def curve_with_band(
     hi = np.nanpercentile(curves, pct[1], axis=0)
     ax.plot(x, center, color=color, label=label)
     ax.fill_between(x, lo, hi, color=color, alpha=0.18, linewidth=0)
+    if show_mean:
+        ax.plot(x, np.nanmean(curves, axis=0), color=color, ls="--",
+                alpha=0.55, lw=1.5, label=f"{label} (mean)")
 
 
 def objective_space(

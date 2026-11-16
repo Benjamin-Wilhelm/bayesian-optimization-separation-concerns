@@ -28,9 +28,10 @@ seeds:
   end: 50
 
 noise:
-  std: 0.0
+  std: 1.0e-6
 
 model:
+  use_fixed_noise: true
   kernel: matern52
 
 acquisition:

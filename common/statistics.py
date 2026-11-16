@@ -627,3 +627,28 @@ def aggregate_convergence_curves(
             out[name] = {"pointwise": pw, "uniform": uf}
     return out
 
+
+
+def paired_bootstrap_difference(right, wrong, *, n_bootstrap=5000, seed=0):
+    """95% percentile CI for mean(RIGHT - WRONG), matched by seed row.
+
+    Arrays may be (seed, angle). Complete seed blocks are resampled; angles
+    are averaged within each block and never treated as independent samples.
+    Negative differences favor RIGHT for regret metrics. Not an IQR band.
+    """
+    r, w = np.asarray(right, dtype=float), np.asarray(wrong, dtype=float)
+    if r.shape != w.shape or r.ndim not in (1, 2) or not r.size:
+        raise ValueError("Matched nonempty seed arrays required")
+    if not np.isfinite(r).all() or not np.isfinite(w).all() or n_bootstrap < 1:
+        raise ValueError("Finite paired samples and positive replication count required")
+    differences = r-w
+    if r.ndim == 2:
+        differences = differences.mean(axis=1)
+    rng = np.random.default_rng(seed)
+    indices = rng.integers(0, len(r), (n_bootstrap, len(r)))
+    bootstrap = differences[indices].mean(axis=1)
+    lower, upper = np.quantile(bootstrap, [.025, .975])
+    return dict(estimate=float(differences.mean()), lower=float(lower), upper=float(upper),
+                confidence=.95, n_bootstrap=n_bootstrap, n_seeds=len(r), seed=seed,
+                statistic="mean paired difference RIGHT - WRONG",
+                resampling_unit="complete seed block", identifiable=len(r) > 1)

@@ -44,6 +44,8 @@ from common.serialization import load_json, save_json
 from common.statistics import summarize_sample, wilcoxon_paired_comparison
 from benchmarks import multi_objective as mo_benchmarks
 from experiments.exp_c_multiobjective import plotting
+from experiments.exp_c_multiobjective.trajectory_figures import fixed_trajectory_figures
+from experiments.exp_c_multiobjective.final_comparisons import final_comparisons
 from data.raw_multiobjective import ParetoSeedData
 from common.hypervolume import non_dominated_mask
 from experiments.exp_c_multiobjective.process import assert_compatible_metadata
@@ -71,9 +73,10 @@ def _load_processed(run_dir: Path) -> list[dict[str, Any]]:
 
 
 def _stack(curves: list[list[float]]) -> np.ndarray:
-    """Stack per-seed curves into ``(n_seeds, n_steps)`` (truncate to min len)."""
-    min_len = min(len(c) for c in curves)
-    return np.asarray([c[:min_len] for c in curves], dtype=float)
+    """Stack equal-budget per-seed curves into ``(n_seeds, n_steps)``."""
+    if not curves or len({len(c) for c in curves}) != 1:
+        raise ValueError("Curves must share identical evaluation budgets")
+    return np.asarray(curves, dtype=float)
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +151,10 @@ def _analyze_fixed(processed: list[dict[str, Any]], fig_dir: Path) -> dict[str, 
             st = plotting.style_for(mname)
             x = list(range(1, agg.shape[1] + 1))
             ax.plot(x, agg.mean(axis=0), color=st["color"], label=st["label"])
+            mean_curve = np.mean([_stack(store[(scal, a)][mname]["simple_regret"]).mean(axis=0)
+                                  for a in angles], axis=0)
+            ax.plot(x, mean_curve, color=st["color"], ls="--", alpha=.55,
+                    label=f"{st['label']} (mean over seeds and angles)")
             ax.fill_between(x, agg.min(axis=0), agg.max(axis=0),
                             color=st["color"], alpha=0.15, linewidth=0)
         ax.set_yscale("log"); ax.set_xlabel("evaluations")
@@ -178,6 +185,11 @@ def _analyze_pareto(
             for metric in ("hypervolume", "hypervolume_regret",
                            "empirical_bayes_regret"):
                 store[mname][metric].append(m[metric])
+            for metric in ("cumulative_dominance_regret", "average_dominance_regret",
+                           "dominated_query_fraction", "igd"):
+                if metric not in m.get("diagnostics", {}):
+                    raise ValueError("New diagnostics missing; rerun process.py first")
+                store[mname][metric].append(m["diagnostics"][metric])
     hv_star = float(processed[0]["hv_star"])
 
     # Time-series figures (x-axis = global objective budget).
@@ -185,6 +197,10 @@ def _analyze_pareto(
         ("hypervolume", "hypervolume", False, "exact hypervolume"),
         ("hypervolume_regret", "hv_regret", True, "hypervolume regret"),
         ("empirical_bayes_regret", "bayes_regret", True, "empirical Bayes regret"),
+        ("cumulative_dominance_regret", "cumulative_dominance_regret", False, "cumulative dominance regret"),
+        ("average_dominance_regret", "average_dominance_regret", False, "average dominance regret"),
+        ("dominated_query_fraction", "dominated_query_fraction", False, "dominated query fraction (tolerance 1e-8)"),
+        ("igd", "igd", False, "IGD (normalized arc-length reference)"),
     ]
     summary: dict[str, Any] = {"mode": "pareto_front", "hv_star": hv_star,
                                "methods": {}}
@@ -210,6 +226,8 @@ def _analyze_pareto(
             "final_hypervolume": summarize_sample(_stack(store[mname]["hypervolume"])[:, -1]),
             "final_hv_regret": summarize_sample(_stack(store[mname]["hypervolume_regret"])[:, -1]),
             "final_bayes_regret": summarize_sample(_stack(store[mname]["empirical_bayes_regret"])[:, -1]),
+            **{f"final_{metric}": summarize_sample(_stack(store[mname][metric])[:, -1])
+               for metric in ("cumulative_dominance_regret", "average_dominance_regret", "dominated_query_fraction", "igd")},
         }
 
     # Objective- and decision-space scatters for the first available seed.
@@ -311,11 +329,19 @@ def main(argv: Optional[list[str]] = None) -> None:
         return
 
     assert_compatible_metadata([p["metadata"] for p in processed])
+    for p in processed:
+        budget = int(p["metadata"]["budget"])
+        entries = ([m for case in p["cases"] for m in case["methods"].values()]
+                   if p["mode"] == "fixed_scalarization" else list(p["methods"].values()))
+        key = "iteration" if p["mode"] == "fixed_scalarization" else "global_iteration"
+        if any(len(m[key]) != budget for m in entries):
+            raise ValueError("All methods must use the same full evaluation budget")
     mode = processed[0]["mode"]
     fig_dir = primary / "figures"
 
     if mode == "fixed_scalarization":
         summary = _analyze_fixed(processed, fig_dir)
+        fixed_trajectory_figures(primary, fig_dir)
     elif mode == "pareto_front":
         summary = _analyze_pareto(processed, primary, fig_dir)
         if len(run_dirs) > 1:
@@ -323,6 +349,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     else:
         raise ValueError(f"Unknown processed mode '{mode}'.")
 
+    comparisons = final_comparisons(processed, fig_dir)
+    save_json(comparisons, primary / "processed" / "paired_bootstrap_comparisons.json")
     summary["n_seeds"] = len(processed)
     out = primary / "processed" / "aggregate_summary.json"
     out.parent.mkdir(parents=True, exist_ok=True)

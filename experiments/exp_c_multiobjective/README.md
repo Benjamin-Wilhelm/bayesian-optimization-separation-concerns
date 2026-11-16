@@ -251,3 +251,70 @@ configs/
 
 For the `L` ablation, copy a `pareto_front` config and set
 `lambda.n_scalarizations_algorithm_2` to 5 / 10 / 20.
+
+## Additional query and coverage diagnostics
+
+Run `process.py` again on saved results, then `analyze.py` using the commands
+above. These steps only re-evaluate noiseless synthetic objectives at saved
+queries; they do not refit a GP or run BO. Original metrics and figures retain
+their definitions. Existing raw files and optimization configurations are not
+modified. Old processed Pareto files need reprocessing for the new diagnostics.
+
+Fixed-preference figures now include paired RIGHT/WRONG objective-space query
+paths and strict incumbent improvements for every angle, including the shared
+initial design in stored evaluation order. The first available seed is used
+for trajectories and compact first/middle/last-angle summaries. Both panels
+share limits and iteration color normalization. Gold crosses indicate continuous analytical ZDT optima (including tied
+optima); other benchmarks use a dense-front fallback. Stars mark
+final incumbents. Preference maps show those final incumbents for each angle,
+for the representative seed and all available seeds. The interior of ZDT2's
+concave front cannot be selected by positive linear scalarizations; this is a
+scalarization limitation rather than an algorithm failure.
+
+Pareto processed methods contain a new `diagnostics` dictionary:
+
+- `dominance_regret`: per-query normalized additive L-infinity distance to
+  domination by the continuous analytical ZDT front, calculated by bisection.
+- `cumulative_dominance_regret` and `average_dominance_regret`: prefix sum and
+  prefix sum divided by the number of global evaluations.
+- `dominated_query_fraction`: fraction with dominance distance greater than
+  **1e-8 normalized units**. This tolerance-based diagnostic measures strict
+  additive domination, not the severity of domination.
+- `igd`: mean normalized Euclidean distance from a fixed reference front to
+  the accumulated nondominated archive. The 1,001-point reference is uniformly
+  resampled in normalized arc length from a 10,001-point analytical front.
+
+Both ZDT objectives have a fixed front span of one, so scales are `(1, 1)`
+for every method and seed; no observed-range normalization is used. All these
+metrics use noiseless **minimization** values. Existing hypervolume and scalar
+metrics continue to use their **maximization** convention. The diagnostic
+reference and tolerance are recorded in processed JSON. Initial observations
+count toward every prefix. Algorithm 2 uses the stored global round-robin
+budget convention; lines describe budgets, not physical chronology across
+independent subruns. No new ordering is created.
+
+**IGD is not universally monotone for a nondominated archive.** Adding an
+observation can remove an older dominated archive member that was closer to
+some reference points in Euclidean distance. IGD is retained exactly as
+specified, without a running-minimum transform. Tests verify monotonicity for
+archive extensions without this removal effect and include a counterexample
+to the unconditional claim.
+
+Main curves retain the median and 25–75% inter-seed IQR, and add a lighter
+dashed mean. The aggregate fixed-preference curve still uses the mean of
+per-angle medians and the min–max range over angles; its dashed curve is the
+mean over seeds and angles. Neither variability band is a confidence interval.
+Final regret boxplots include seed points. `paired_bootstrap_comparisons.json`
+and separate difference figures report 95% percentile confidence intervals
+for **mean(RIGHT − WRONG)**, using 5,000 paired seed bootstrap replications and
+a deterministic random seed of zero. Negative differences favor RIGHT for
+regrets. Fixed-preference aggregates average angles within each seed and
+resample whole seed blocks. Results include the seed IDs, replication count,
+and an `identifiable` flag (false for a single available seed). The Alg. 1 vs
+WRONG Alg. 2 contrast is paired by seed, but does not share an initial design;
+RIGHT vs WRONG Alg. 2 retains the stricter paired subrun design.
+
+Every figure is saved in PNG and PDF under the existing run's `figures/`.
+Runs without completed raw seed files cannot yet be analyzed. Summaries of
+incomplete runs describe only the available complete seeds, not all configured
+seeds. MaxGap is not implemented; IGD remains the coverage diagnostic.

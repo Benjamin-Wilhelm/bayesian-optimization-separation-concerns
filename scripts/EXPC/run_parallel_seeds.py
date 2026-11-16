@@ -135,6 +135,8 @@ def main(argv=None) -> int:
     ap.add_argument("--max-workers", type=int,
                     default=max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument("--results-root", type=Path, default=_ROOT / "results")
+    ap.add_argument("--schedule", choices=("all", "logbeta", "beta8"),
+                    default="all", help="Select the beta schedule to run.")
     ap.add_argument("--reuse-existing", action="store_true",
                     help="Resume: fill the newest existing run dir for each tag "
                          "instead of creating a fresh dated dir. Off by default "
@@ -144,6 +146,8 @@ def main(argv=None) -> int:
     torch.set_num_threads(1)
     jobs = []
     for rel, tag in CONFIGS:
+        if args.schedule != "all" and not tag.endswith("_" + args.schedule):
+            continue
         config = yaml.safe_load((CONFIG_ROOT / rel).read_text(encoding="utf-8"))
         validate_config(config)
         mode = config["experiment_mode"]

@@ -177,6 +177,7 @@ class ParetoMethodProcessed:
     hypervolume_regret: list[float]
     empirical_bayes_regret: list[float]
     subruns: list[ParetoSubrunMeta]
+    diagnostics: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -187,6 +188,7 @@ class ParetoMethodProcessed:
             "hypervolume_regret": self.hypervolume_regret,
             "empirical_bayes_regret": self.empirical_bayes_regret,
             "subruns": [s.to_dict() for s in self.subruns],
+            "diagnostics": self.diagnostics,
         }
 
     @classmethod
@@ -199,6 +201,7 @@ class ParetoMethodProcessed:
             hypervolume_regret=list(d["hypervolume_regret"]),
             empirical_bayes_regret=list(d["empirical_bayes_regret"]),
             subruns=[ParetoSubrunMeta.from_dict(s) for s in d.get("subruns", [])],
+            diagnostics=d.get("diagnostics", {}),
         )
 
 
