@@ -118,9 +118,8 @@ Here `budget` counts **additional BO evaluations**; total cost is
 `initial_design_size + budget`. Methods share initial inputs and observations.
 The base scientific configs above are noiseless; `noise_std` controls Gaussian
 observation noise. For nested benchmark configs, it belongs inside `benchmark`.
-Both methods currently use fixed noise equal to the benchmark noise, despite
-comments in `run.py` saying WRONG infers it. Reusing this variance after the
-absolute-value transform is a modeling approximation for noisy WRONG runs.
+Both methods currently use fixed noise equal to the benchmark noise, as noise is currently set to 0; To further study, the effect of noise, one could try to infer noise variance for the wrong model, as the transformation of the objective folds the noise, leading to another source of misspecification. Reusing a fixed variance after the
+absolute-value transform is a modeling approximation for noisy WRONG runs (except when it is set to 0 obviously.
 
 Input normalization and output standardization are enabled for both methods by
 the builder defaults. `model.kernel` selects the kernel; the runner does not
