@@ -38,8 +38,6 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
-
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -50,6 +48,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed  # noqa: E402
 from benchmarks import build_benchmark  # noqa: E402
 from common.acquisition_utils import BetaSchedule  # noqa: E402
 from common.logging import RunLogger  # noqa: E402
+from scripts.launcher_utils import load_launcher_config  # noqa: E402
 import experiments.exp_a_target_matching.run as R  # noqa: E402
 
 EXPERIMENT = "exp_a_target_matching"
@@ -123,6 +122,9 @@ def _resolve_run_dir(tag: str, results_root: Path,
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--config", type=Path, default=None,
+                    help="Run only this YAML (relative to the current directory or absolute); "
+                         "otherwise use the existing CONFIG_DIR/CONFIGS batch.")
     ap.add_argument("--max-workers", type=int,
                     default=max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument("--results-root", type=Path, default=_ROOT / "results")
@@ -134,9 +136,10 @@ def main(argv=None) -> int:
 
     torch.set_num_threads(1)
     jobs = []
-    for name in CONFIGS:
-        config = yaml.safe_load((CONFIG_DIR / name).read_text(encoding="utf-8"))
-        tag = config.get("tag") or Path(name).stem
+    paths = [args.config] if args.config is not None else [CONFIG_DIR / name for name in CONFIGS]
+    for path in paths:
+        config = load_launcher_config(path, ap)
+        tag = config.get("tag") or path.stem
         problem = build_benchmark(config)
         beta_schedule = BetaSchedule.from_config(config)
         logger = _resolve_run_dir(tag, args.results_root,

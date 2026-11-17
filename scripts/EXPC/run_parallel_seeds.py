@@ -34,8 +34,6 @@ import sys
 import time
 from pathlib import Path
 
-import yaml
-
 _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
@@ -45,6 +43,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed  # noqa: E402
 
 from benchmarks import multi_objective as mo_benchmarks  # noqa: E402
 from common.logging import RunLogger  # noqa: E402
+from scripts.launcher_utils import load_launcher_config  # noqa: E402
 import experiments.exp_c_multiobjective.run as R  # noqa: E402
 from experiments.exp_c_multiobjective.config import validate_config  # noqa: E402
 
@@ -52,21 +51,18 @@ EXPERIMENT = "exp_c_multiobjective"
 CONFIG_ROOT = _ROOT / "experiments" / "exp_c_multiobjective" / "configs"
 
 # (relative config path, explicit run tag).  Explicit tags disambiguate the
-# identical filenames in the two sub-dirs and bypass the swapped pareto tags.
+# identical filenames in the sub-dirs and identify the beta schedule.
 
 CONFIGS = [
-    # --- log-beta schedule (original).  Explicit tags also FIX the swapped
-    #     d2/d6 tags inside the pareto_front/*.yaml files. ---
+    # --- log-beta schedule ---
     ("fixed_scalarization/LOG_BETA/zdt1_d2.yaml", "fixed_zdt1_d2_logbeta"),
     ("fixed_scalarization/LOG_BETA/zdt1_d6.yaml", "fixed_zdt1_d6_logbeta"),
     ("fixed_scalarization/LOG_BETA/zdt2_d2.yaml", "fixed_zdt2_d2_logbeta"),
     ("fixed_scalarization/LOG_BETA/zdt2_d6.yaml", "fixed_zdt2_d6_logbeta"),
     ("pareto_front/zdt1_d2.yaml", "pareto_zdt1_d2_logbeta"),
     ("pareto_front/zdt1_d6.yaml", "pareto_zdt1_d6_logbeta"),
-    # NB: pareto_front/zdt2_d2.yaml actually holds input_dim=6 and zdt2_d6.yaml
-    # holds input_dim=2 (mis-named source files); tags below match the CONTENT.
-    ("pareto_front/zdt2_d2.yaml", "pareto_zdt2_d6_logbeta"),
-    ("pareto_front/zdt2_d6.yaml", "pareto_zdt2_d2_logbeta"),
+    ("pareto_front/zdt2_d2.yaml", "pareto_zdt2_d2_logbeta"),
+    ("pareto_front/zdt2_d6.yaml", "pareto_zdt2_d6_logbeta"),
     # --- constant beta = 8 ---
     ("fixed_scalarization/beta=8/zdt1_d2.yaml", "fixed_zdt1_d2_beta8"),
     ("fixed_scalarization/beta=8/zdt1_d6.yaml", "fixed_zdt1_d6_beta8"),
@@ -74,9 +70,8 @@ CONFIGS = [
     ("fixed_scalarization/beta=8/zdt2_d6.yaml", "fixed_zdt2_d6_beta8"),
     ("pareto_front/beta=8/zdt1_d2.yaml", "pareto_zdt1_d2_beta8"),
     ("pareto_front/beta=8/zdt1_d6.yaml", "pareto_zdt1_d6_beta8"),
-    # Same content/filename swap as the log-beta pareto zdt2 files above.
-    ("pareto_front/beta=8/zdt2_d2.yaml", "pareto_zdt2_d6_beta8"),
-    ("pareto_front/beta=8/zdt2_d6.yaml", "pareto_zdt2_d2_beta8"),
+    ("pareto_front/beta=8/zdt2_d2.yaml", "pareto_zdt2_d2_beta8"),
+    ("pareto_front/beta=8/zdt2_d6.yaml", "pareto_zdt2_d6_beta8"),
 ]
 
 
@@ -135,8 +130,12 @@ def main(argv=None) -> int:
     ap.add_argument("--max-workers", type=int,
                     default=max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument("--results-root", type=Path, default=_ROOT / "results")
-    ap.add_argument("--schedule", choices=("all", "logbeta", "beta8"),
-                    default="all", help="Select the beta schedule to run.")
+    selection = ap.add_mutually_exclusive_group()
+    selection.add_argument("--config", type=Path, default=None,
+                           help="Run only this YAML (relative to the current directory or absolute); "
+                                "otherwise use the existing CONFIGS batch.")
+    selection.add_argument("--schedule", choices=("all", "logbeta", "beta8"),
+                           default="all", help="Select the beta schedule in the default batch.")
     ap.add_argument("--reuse-existing", action="store_true",
                     help="Resume: fill the newest existing run dir for each tag "
                          "instead of creating a fresh dated dir. Off by default "
@@ -145,11 +144,13 @@ def main(argv=None) -> int:
 
     torch.set_num_threads(1)
     jobs = []
-    for rel, tag in CONFIGS:
-        if args.schedule != "all" and not tag.endswith("_" + args.schedule):
-            continue
-        config = yaml.safe_load((CONFIG_ROOT / rel).read_text(encoding="utf-8"))
+    selected = ([(args.config, None)] if args.config is not None else
+                [(CONFIG_ROOT / rel, tag) for rel, tag in CONFIGS
+                 if args.schedule == "all" or tag.endswith("_" + args.schedule)])
+    for path, batch_tag in selected:
+        config = load_launcher_config(path, ap)
         validate_config(config)
+        tag = batch_tag or config.get("tag") or path.stem
         mode = config["experiment_mode"]
         logger = _resolve_run_dir(tag, args.results_root,
                                   reuse=args.reuse_existing)
