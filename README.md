@@ -388,10 +388,6 @@ plotting can also read raw data. Postprocessing does not rerun BO.
 
 - A's `smoke_1d.yaml` currently runs **Branin-2D**, 20 seeds and 50 BO steps with
   20 initial points; it is not a tiny 1D smoke test despite its name/comments.
-- In C's `pareto_front/` and `pareto_front/beta=8/`, ZDT1 d2/d6 tags are swapped;
-  ZDT2's `zdt2_d2.yaml` contains **6D**, and `zdt2_d6.yaml` contains **2D**.
-  Inspect `benchmark.input_dim`; use explicit `--tag`. The Python parallel driver
-  already assigns tags matching the contents.
 - `scripts/EXPC/runC_all_cpu.sh` references missing
   `fixed_scalarization/zdt*.yaml` paths. Use the documented Python driver or the
   actual `LOG_BETA/` and `beta=8/` configs. C's latest-run wrappers do not match
