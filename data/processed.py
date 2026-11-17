@@ -304,6 +304,7 @@ class MethodProcessed:
     final:        FinalScalars
     convergence:  ConvergenceCurves
     calibrations:  list[CalibrationReport]
+    generalization: list[dict[str, Any]] = dataclasses.field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -311,6 +312,7 @@ class MethodProcessed:
             "final":       self.final.to_dict(),
             "convergence": self.convergence.to_dict(),
             "calibrations": [c.to_dict() for c in self.calibrations],
+            "generalization": self.generalization,
         }
 
     @classmethod
@@ -321,6 +323,7 @@ class MethodProcessed:
             final=FinalScalars.from_dict(d["final"]),
             convergence=ConvergenceCurves.from_dict(d["convergence"]),
             calibrations=[CalibrationReport.from_dict(c) for c in d["calibrations"]],
+            generalization=d.get("generalization", []),
         )
 
 

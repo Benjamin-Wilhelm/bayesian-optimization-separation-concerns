@@ -318,3 +318,54 @@ Every figure is saved in PNG and PDF under the existing run's `figures/`.
 Runs without completed raw seed files cannot yet be analyzed. Summaries of
 incomplete runs describe only the available complete seeds, not all configured
 seeds. MaxGap is not implemented; IGD remains the coverage diagnostic.
+
+## Figure selection and existing results
+
+The main `figures/` directory keeps the following views for both scalarization
+families, front geometries and input dimensions. No BO protocol, processed
+metric, paired seed block or bootstrap definition changes with this selection.
+
+- **Fixed preference:** paired RIGHT/WRONG query maps for **every** angle, with
+  evaluation colours and reference optima; two-panel simple/cumulative regret
+  curves for every angle; aggregate curves for **both** regrets; all-seed final
+  preference maps; aggregate final boxplots; separate paired bootstrap plots
+  for simple and cumulative regret, retaining every angle and its aggregate.
+- **Pareto:** hypervolume regret (quality of the accumulated set), cumulative
+  dominance regret (sum of per-query dominance distances), dominated-query
+  fraction (frequency, with the existing 1e-8 tolerance), and IGD (coverage).
+  Three-method query maps share axes and a global-budget colour scale; final
+  nondominated fronts are compared in a separate three-panel figure. The first
+  available seed is used, as before. Final distributions and paired bootstrap
+  plots remain for HV regret, cumulative dominance regret and IGD.
+
+`figures/supplementary/` holds per-angle final boxplots, incumbent-only paths,
+single-seed preference maps, redundant trajectory summaries, individual Pareto
+objective/decision-space plots, raw hypervolume, empirical Bayes regret, and
+average dominance regret (including its final and paired plots). All numerical
+summaries and paired bootstrap results remain in `processed/`, including those
+whose plots are supplementary. Hypervolume and its regret are equivalent up to
+the fixed reference optimum; average and cumulative dominance differ by the
+prefix length. Empirical Bayes regret remains available and should not be
+treated as redundant for other scalarization families.
+
+`figures/archive/` preserves legacy three-panel fixed figures containing
+best-so-far, and legacy bootstrap figures mixing different metrics on one axis.
+No figure is deleted. `figure_selection.json` records file moves; unknown file
+names are left alone. New analyses apply the same selection automatically.
+
+To update **already generated** results without rebuilding the unchanged fixed
+query maps or recalculating paired bootstraps:
+
+```bash
+python -m experiments.exp_c_multiobjective.analyze \
+  --run-dir results/exp_c_multiobjective/runs/<run_id> --refresh-selection
+```
+
+This validates that the saved paired seed IDs and reusable figures are present,
+moves secondary figures, and regenerates regret panels and Pareto views from
+saved data. For new or partially generated results, omit `--refresh-selection`
+to generate all views. Neither command fits a GP or reruns BO. Algorithm 2's
+query colours follow the stored round-robin **global budget**, not physical
+chronology between independent subruns. Dominance frequency and IGD are
+diagnostics, not substitutes for regret; the two Pareto regrets measure
+different objects and are labelled accordingly.

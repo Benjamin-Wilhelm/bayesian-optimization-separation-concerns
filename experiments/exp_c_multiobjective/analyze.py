@@ -7,15 +7,13 @@ an aggregate summary JSON, and produces the figures under ``figures/``.
 Figures (all saved as PNG + PDF; strictly-positive regrets on a log axis):
 
 ``fixed_scalarization``
-    per (scalarization, angle): best-so-far, simple regret, cumulative
-    instantaneous regret — RIGHT vs WRONG; plus a per-scalarization aggregate
-    over angles.
+    per (scalarization, angle): simple and cumulative instantaneous regret —
+    RIGHT vs WRONG; plus per-scalarization aggregates over angles and query maps.
 
 ``pareto_front``
-    hypervolume, hypervolume regret, empirical Bayes regret vs the **global**
-    objective budget (all methods overlaid); objective-space (raw ZDT,
-    ``lower is better``) and decision-space (``input_dim == 2``) scatters for
-    one seed.  Passing several ``--run-dir`` produces the L-ablation overlay.
+    hypervolume regret, cumulative dominance regret, dominated query fraction,
+    IGD, query maps and final fronts. Secondary views go to ``supplementary/``.
+    Passing several ``--run-dir`` produces the L-ablation overlay.
 
 CLI::
 
@@ -46,6 +44,7 @@ from benchmarks import multi_objective as mo_benchmarks
 from experiments.exp_c_multiobjective import plotting
 from experiments.exp_c_multiobjective.trajectory_figures import fixed_trajectory_figures
 from experiments.exp_c_multiobjective.final_comparisons import final_comparisons
+from experiments.exp_c_multiobjective.figure_selection import organize_existing_figures
 from data.raw_multiobjective import ParetoSeedData
 from common.hypervolume import non_dominated_mask
 from experiments.exp_c_multiobjective.process import assert_compatible_metadata
@@ -106,20 +105,17 @@ def _analyze_fixed(processed: list[dict[str, Any]], fig_dir: Path) -> dict[str, 
         for angle in angles:
             key = (scal, angle)
             methods = store[key]
-            fig, axes = plt.subplots(1, 3, figsize=(15, 4.2))
+            fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
             for mname, metrics in methods.items():
                 st = plotting.style_for(mname)
                 x = list(range(1, _stack(metrics["best_so_far"]).shape[1] + 1))
-                plotting.curve_with_band(axes[0], x, _stack(metrics["best_so_far"]),
+                plotting.curve_with_band(axes[0], x, _stack(metrics["simple_regret"]),
                                          color=st["color"], label=st["label"])
-                plotting.curve_with_band(axes[1], x, _stack(metrics["simple_regret"]),
+                plotting.curve_with_band(axes[1], x, _stack(metrics["cumulative_regret"]),
                                          color=st["color"], label=st["label"])
-                plotting.curve_with_band(axes[2], x, _stack(metrics["cumulative_regret"]),
-                                         color=st["color"], label=st["label"])
-            axes[0].set_title("best-so-far scalarized"); axes[0].set_xlabel("evaluations")
-            axes[1].set_title("simple regret"); axes[1].set_xlabel("evaluations")
-            axes[1].set_yscale("log")
-            axes[2].set_title("cumulative inst. regret"); axes[2].set_xlabel("evaluations")
+            axes[0].set_title("simple regret"); axes[0].set_xlabel("evaluations")
+            axes[0].set_yscale("log")
+            axes[1].set_title("cumulative inst. regret"); axes[1].set_xlabel("evaluations")
             for ax in axes:
                 ax.legend(loc="best")
             fig.suptitle(f"fixed scalarization — {scal}, angle {angle:g} deg")
@@ -139,29 +135,29 @@ def _analyze_fixed(processed: list[dict[str, Any]], fig_dir: Path) -> dict[str, 
                 )
             summary["cases"].append(case_summary)
 
-        # Per-scalarization aggregate over angles: mean across angles of the
-        # per-seed-median simple regret, RIGHT vs WRONG.
-        fig, ax = plt.subplots(figsize=(6, 4.2))
-        for mname in sorted({m for a in angles for m in store[(scal, a)]}):
-            per_angle_medians = []
-            for angle in angles:
-                arr = _stack(store[(scal, angle)][mname]["simple_regret"])
-                per_angle_medians.append(np.nanmedian(arr, axis=0))
-            agg = np.asarray(per_angle_medians)   # (n_angles, n_steps)
-            st = plotting.style_for(mname)
-            x = list(range(1, agg.shape[1] + 1))
-            ax.plot(x, agg.mean(axis=0), color=st["color"], label=st["label"])
-            mean_curve = np.mean([_stack(store[(scal, a)][mname]["simple_regret"]).mean(axis=0)
-                                  for a in angles], axis=0)
-            ax.plot(x, mean_curve, color=st["color"], ls="--", alpha=.55,
-                    label=f"{st['label']} (mean over seeds and angles)")
-            ax.fill_between(x, agg.min(axis=0), agg.max(axis=0),
-                            color=st["color"], alpha=0.15, linewidth=0)
-        ax.set_yscale("log"); ax.set_xlabel("evaluations")
-        ax.set_ylabel("simple regret (median, mean over angles)")
-        ax.set_title(f"fixed scalarization — {scal}: aggregate over angles")
-        ax.legend(loc="best")
-        plotting.save_fig(fig, fig_dir, f"fixed_{scal}_aggregate_simple_regret")
+        # Same angle aggregation convention for both regrets; the band is the
+        # angle min–max range, not a confidence interval or inter-seed IQR.
+        for metric in ("simple_regret", "cumulative_regret"):
+            fig, ax = plt.subplots(figsize=(6, 4.2))
+            for mname in sorted({m for a in angles for m in store[(scal, a)]}):
+                arrays = [_stack(store[(scal, a)][mname][metric]) for a in angles]
+                agg = np.asarray([np.nanmedian(arr, axis=0) for arr in arrays])
+                st = plotting.style_for(mname)
+                x = list(range(1, agg.shape[1] + 1))
+                ax.plot(x, agg.mean(axis=0), color=st["color"], label=st["label"])
+                ax.plot(x, np.mean([arr.mean(axis=0) for arr in arrays], axis=0),
+                        color=st["color"], ls="--", alpha=.55,
+                        label=f"{st['label']} (mean over seeds and angles)")
+                ax.fill_between(x, agg.min(axis=0), agg.max(axis=0),
+                                color=st["color"], alpha=0.15, linewidth=0)
+            if metric == "simple_regret":
+                ax.set_yscale("log")
+            label = metric.replace("_", " ")
+            ax.set_xlabel("evaluations")
+            ax.set_ylabel(f"{label} (median, mean over angles)")
+            ax.set_title(f"{scal}: aggregate over angles (band: angle min–max)")
+            ax.legend(loc="best")
+            plotting.save_fig(fig, fig_dir, f"fixed_{scal}_aggregate_{metric}")
 
     return summary
 
@@ -253,12 +249,14 @@ def _pareto_space_figures(run_dir: Path, fig_dir: Path) -> None:
     front_raw = benchmark.true_pareto_front_raw(400).numpy()
     pset = benchmark.true_pareto_set(400).numpy()
 
+    space_data = []
     for mname, method in raw.methods.items():
         X = torch.tensor([e.x for e in method.global_evaluations], dtype=torch.double)
         raw_y = benchmark.evaluate_raw(X)
         oriented = -raw_y
         nd = non_dominated_mask(oriented)
         raw_np = raw_y.numpy()
+        space_data.append((mname, raw_np, raw_np[nd.numpy()]))
 
         fig, ax = plt.subplots(figsize=(5.4, 5.0))
         plotting.objective_space(
@@ -276,6 +274,39 @@ def _pareto_space_figures(run_dir: Path, fig_dir: Path) -> None:
                 title=f"decision space — {mname} (seed {seed})",
             )
             plotting.save_fig(fig, fig_dir, f"pareto_decision_space_{mname}_seed{seed:03d}")
+
+    # Compare methods with shared limits and a common global-budget colour scale.
+    # Alg. 2's round-robin order is a budget convention, not physical chronology;
+    # do not connect points from independent subruns with trajectory segments.
+    from matplotlib.colors import Normalize
+    norm = Normalize(1, max(len(y) for _, y, _ in space_data))
+    for query_map in (True, False):
+        fig, axes = plt.subplots(1, len(space_data), figsize=(5*len(space_data), 4.5),
+                                 sharex=True, sharey=True, squeeze=False,
+                                 layout="constrained")
+        for ax, (mname, queries, archive) in zip(axes[0], space_data):
+            ax.plot(front_raw[:, 0], front_raw[:, 1], 'k-', lw=1,
+                    label="true Pareto front")
+            if query_map:
+                scatter = ax.scatter(queries[:, 0], queries[:, 1],
+                                     c=np.arange(1, len(queries)+1), cmap="viridis",
+                                     norm=norm, s=18, alpha=.75)
+            else:
+                ax.scatter(archive[:, 0], archive[:, 1], s=25,
+                           color=plotting.style_for(mname)["color"],
+                           label="final nondominated archive")
+            ax.set_title(plotting.style_for(mname)["label"])
+            ax.set_xlabel(r"$f_1$ (minimize)")
+            ax.set_ylabel(r"$f_2$ (minimize)")
+            ax.legend(fontsize=7)
+        if query_map:
+            fig.colorbar(scatter, ax=list(axes[0]), label="global objective budget")
+            fig.suptitle(f"All queries — seed {seed} (Alg. 2: round-robin budget order)")
+            name = "query_map"
+        else:
+            fig.suptitle(f"Final Pareto archives — seed {seed}")
+            name = "final_front"
+        plotting.save_fig(fig, fig_dir, f"pareto_{name}_seed{seed:03d}")
 
 
 def _l_ablation(run_dirs: list[Path], fig_dir: Path) -> None:
@@ -319,6 +350,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, action="append", required=True,
                         help="Run directory (repeatable; several enables L ablation).")
+    parser.add_argument("--refresh-selection", action="store_true",
+                        help="Refresh the figure layout using existing query maps and paired "
+                             "comparisons; requires previously generated figures and statistics.")
     args = parser.parse_args(argv)
 
     run_dirs = [rd.resolve() for rd in args.run_dir]
@@ -338,10 +372,34 @@ def main(argv: Optional[list[str]] = None) -> None:
             raise ValueError("All methods must use the same full evaluation budget")
     mode = processed[0]["mode"]
     fig_dir = primary / "figures"
+    comparisons_path = primary / "processed" / "paired_bootstrap_comparisons.json"
+    if args.refresh_selection:
+        # Validate reuse before moving any files. Bootstrap definitions do not
+        # change in this presentation-only refresh.
+        comparisons = load_json(comparisons_path)
+        expected_seeds = sorted(int(p["metadata"]["seed"]) for p in processed)
+        if (not comparisons["comparisons"] or any(
+                sorted(c["seed_ids"]) != expected_seeds for c in comparisons["comparisons"])):
+            raise ValueError("Saved paired comparisons do not match processed seeds; run full analyze.py")
+        required = [f"{mode}_paired_bootstrap_{c['metric']}"
+                    for c in comparisons["comparisons"]]
+        if mode == "fixed_scalarization":
+            first = processed[0]
+            seed = int(first["metadata"]["seed"])
+            required.extend(f"fixed_{c['scalarization']}_angle{c['lambda']['angle_degrees']:g}"
+                            f"_queries_seed{seed:03d}" for c in first["cases"])
+            required.extend(f"fixed_{c['scalarization']}_preference_map_all_seeds"
+                            for c in first["cases"])
+        if any(not (fig_dir / f"{name}.{ext}").exists()
+               and not (fig_dir / "supplementary" / f"{name}.{ext}").exists()
+               for name in required for ext in ("png", "pdf")):
+            raise ValueError("Missing reusable figures; run full analyze.py without --refresh-selection")
+    organize_existing_figures(fig_dir)
 
     if mode == "fixed_scalarization":
         summary = _analyze_fixed(processed, fig_dir)
-        fixed_trajectory_figures(primary, fig_dir)
+        if not args.refresh_selection:
+            fixed_trajectory_figures(primary, fig_dir)
     elif mode == "pareto_front":
         summary = _analyze_pareto(processed, primary, fig_dir)
         if len(run_dirs) > 1:
@@ -349,8 +407,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     else:
         raise ValueError(f"Unknown processed mode '{mode}'.")
 
-    comparisons = final_comparisons(processed, fig_dir)
-    save_json(comparisons, primary / "processed" / "paired_bootstrap_comparisons.json")
+    if not args.refresh_selection:
+        comparisons = final_comparisons(processed, fig_dir)
+        save_json(comparisons, comparisons_path)
     summary["n_seeds"] = len(processed)
     out = primary / "processed" / "aggregate_summary.json"
     out.parent.mkdir(parents=True, exist_ok=True)

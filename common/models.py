@@ -32,6 +32,7 @@ from botorch.models.transforms.outcome import Standardize
 from gpytorch.kernels import Kernel, MaternKernel, RBFKernel, ScaleKernel
 from gpytorch.mlls import ExactMarginalLogLikelihood
 from gpytorch.priors import GammaPrior
+from linear_operator.utils.cholesky import psd_safe_cholesky
 
 
 # ---------------------------------------------------------------------------
@@ -153,14 +154,26 @@ class GPModelConfig:
             ``"rbf"``).  ``"matern52"`` uses the BoTorch default unchanged;
             the others are built explicitly with the same Gamma hyperpriors
             (see :func:`make_covar_module`).
+        fixed_lengthscale: Optional positive scalar or ARD vector, in
+            input-transform coordinates. Freezes only the lengthscale;
+            other trainable parameters still undergo MLL optimization.
+        input_bounds: Optional fixed (2, d) bounds for input normalization.
+            None preserves the existing data-dependent normalization.
     """
 
     noise_std: Optional[float] = None
     normalize_input: bool = True
     standardize_output: bool = True
     kernel: str = "matern52"
+    # Lengthscales are in input-transform coordinates. None retains MLL fitting.
+    fixed_lengthscale: Optional[float | list[float]] = None
+    input_bounds: Optional[list[list[float]]] = None
 
     def __post_init__(self) -> None:
+        if self.fixed_lengthscale is not None:
+            values = torch.as_tensor(self.fixed_lengthscale, dtype=torch.double)
+            if values.numel() == 0 or not torch.isfinite(values).all() or (values <= 0).any():
+                raise ValueError("fixed_lengthscale must contain positive finite values")
         if self.kernel not in SUPPORTED_KERNELS:
             raise ValueError(
                 f"Unsupported kernel '{self.kernel}'.  "
@@ -224,6 +237,63 @@ def load_state_dict_into(model: torch.nn.Module, serial: dict[str, Any]) -> None
 # Builder
 # ---------------------------------------------------------------------------
 
+@torch.no_grad()
+def effective_rkhs_norm(model: SingleTaskGP) -> dict[str, Any]:
+    """Norm of the centered posterior mean of a scalar, unbatched GP.
+
+    In model coordinates, r = train_targets - prior_mean(X),
+    alpha = (K + diag(noise))^{-1} r, and B² = alphaᵀ K alpha.
+    K includes outputscale; noise is the likelihood's actual training noise
+    (including any library floor), not the requested noise or latent variance.
+    Evaluation-mode train_inputs already include the input transform.
+
+    With Standardize(mean=a, std=s), the raw centered mean is s K(x,X) alpha
+    and its raw covariance is s² K, so its norm is also B. The prior mean
+    a + s*m(x) is excluded: it need not belong to the kernel's RKHS.
+    For a ScaleKernel, also return the raw centered mean's norm under the
+    unit-outputscale base kernel, s*sqrt(outputscale)*B. This removes changing
+    amplitude conventions, but still depends on lengthscale/input coordinates.
+    No fitting or explicit matrix inverse is used.
+    """
+    if model.training:
+        raise ValueError("effective_rkhs_norm requires an evaluation-mode GP")
+    X = model.train_inputs[0]
+    if X.ndim != 2 or model.train_targets.ndim != 1:
+        raise ValueError("effective_rkhs_norm supports scalar unbatched GPs only")
+    K = model.covar_module(X).to_dense()
+    residual = model.train_targets - model.mean_module(X)
+    noise = model.likelihood.noise.reshape(-1).expand_as(residual)
+    system = K + torch.diag(noise)
+    chol, info = torch.linalg.cholesky_ex(system)
+    solve_jitter = 0.0
+    if info.any():
+        chol = psd_safe_cholesky(system)
+        solve_jitter = float((chol @ chol.T - system).diagonal().max().clamp_min(0))
+    alpha = torch.cholesky_solve(residual.unsqueeze(-1), chol).squeeze(-1)
+    norm_squared = (alpha @ K @ alpha).clamp_min(0)
+    transform = getattr(model, "outcome_transform", None)
+    if transform is not None and not isinstance(transform, Standardize):
+        raise ValueError("RKHS output conversion supports Standardize only")
+    outcome_std = float(transform.stdvs.item()) if transform is not None else 1.0
+    outcome_mean = float(transform.means.item()) if transform is not None else 0.0
+    outputscale = float(model.covar_module.outputscale)
+    return dict(
+        effective_rkhs_norm=float(norm_squared.sqrt()),
+        effective_rkhs_norm_squared=float(norm_squared),
+        effective_rkhs_norm_unit_outputscale=float(norm_squared.sqrt()) * outcome_std * outputscale**.5,
+        rkhs_context=dict(
+            convention="centered_posterior_mean_in_fitted_kernel",
+            outcome_mean=outcome_mean, outcome_std=outcome_std,
+            prior_mean_raw=(outcome_mean + outcome_std * model.mean_module(X)).tolist(),
+            outputscale_raw=outcome_std**2 * outputscale,
+            noise_variance_raw_min=float(noise.min()) * outcome_std**2,
+            noise_variance_raw_max=float(noise.max()) * outcome_std**2,
+            # Nonzero only if the Cholesky routine added numerical jitter.
+            solve_jitter=solve_jitter,
+        ),
+    )
+
+
 class GPModelBuilder:
     """Centralises GP construction, fitting, prediction, and diagnostics.
 
@@ -270,7 +340,14 @@ class GPModelBuilder:
 
         kwargs: dict[str, Any] = {"train_X": train_X, "train_Y": train_Y}
         if self.config.normalize_input:
-            kwargs["input_transform"] = Normalize(d=train_X.shape[-1])
+            bounds = (torch.as_tensor(self.config.input_bounds, dtype=train_X.dtype,
+                                      device=train_X.device)
+                      if self.config.input_bounds is not None else None)
+            if bounds is not None and (bounds.shape != (2, train_X.shape[-1])
+                                       or not torch.isfinite(bounds).all()
+                                       or not torch.all(bounds[0] < bounds[1])):
+                raise ValueError("input_bounds must be finite ordered (2, d) bounds")
+            kwargs["input_transform"] = Normalize(d=train_X.shape[-1], bounds=bounds)
         if self.config.standardize_output:
             kwargs["outcome_transform"] = Standardize(m=train_Y.shape[-1])
         covar_module = make_covar_module(self.config.kernel, train_X.shape[-1])
@@ -283,6 +360,14 @@ class GPModelBuilder:
         else:
             model = SingleTaskGP(**kwargs)
         model.to(train_X.device)
+        if self.config.fixed_lengthscale is not None:
+            base = model.covar_module.base_kernel
+            lengthscale = torch.as_tensor(self.config.fixed_lengthscale,
+                                         dtype=train_X.dtype, device=train_X.device)
+            if lengthscale.ndim > 1 or lengthscale.numel() not in (1, train_X.shape[-1]):
+                raise ValueError("fixed_lengthscale must be scalar or have one value per input dimension")
+            base.lengthscale = lengthscale
+            base.raw_lengthscale.requires_grad_(False)
         model.eval()
         return model
 
@@ -356,6 +441,8 @@ class GPModelBuilder:
                 normalize_input=self.config.normalize_input,
                 standardize_output=self.config.standardize_output,
                 kernel=self.config.kernel,
+                fixed_lengthscale=self.config.fixed_lengthscale,
+                input_bounds=self.config.input_bounds,
             )
             models.append(GPModelBuilder(task_cfg).fit(X, Y))
         return ModelListGP(*models)

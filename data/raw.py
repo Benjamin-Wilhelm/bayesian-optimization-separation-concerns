@@ -152,6 +152,8 @@ class ModelSnapshot:
     noise_std: Optional[float]
     state_dict: dict[str, Any]
     hyperparameters: dict[str, Any]
+    # Optional construction settings; legacy snapshots retain their defaults.
+    model_config: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)

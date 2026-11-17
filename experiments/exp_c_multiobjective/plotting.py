@@ -13,6 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Sequence
 
+from experiments.exp_c_multiobjective.figure_selection import figure_directory
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
@@ -62,7 +64,8 @@ def apply_style() -> None:
 
 
 def save_fig(fig, out_dir: Path, name: str) -> None:
-    """Save ``fig`` as ``name.png`` and ``name.pdf`` under ``out_dir``."""
+    """Save PNG/PDF in the main or supplementary presentation selection."""
+    out_dir = figure_directory(out_dir, name)
     out_dir.mkdir(parents=True, exist_ok=True)
     for ext in ("png", "pdf"):
         fig.savefig(out_dir / f"{name}.{ext}")

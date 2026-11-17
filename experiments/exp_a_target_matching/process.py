@@ -39,6 +39,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from benchmarks import (
     BENCHMARK_REGISTRY,
+    SyntheticBenchmark,
     build_benchmark,
 )
 from common.diagnostics import (
@@ -55,6 +56,7 @@ from common.metrics import (
 from common.models import (
     GPModelBuilder,
     GPModelConfig,
+    effective_rkhs_norm,
     load_state_dict_into,
 )
 from common.serialization import load_json, save_json
@@ -138,6 +140,7 @@ def _rebuild_gp_at_snapshot(
     config = GPModelConfig(
         noise_std=snapshot.noise_std,
         kernel=snapshot.kernel_name or "matern52",
+        **snapshot.model_config,
     )
     builder = GPModelBuilder(config)
     model = builder.construct(train_X, train_Y)
@@ -367,6 +370,82 @@ def _calibration_reports(
 # One seed
 # ---------------------------------------------------------------------------
 
+def _generalization_reports(
+    method: MethodTrajectory,
+    initial_design: InitialDesign,
+    problem: SyntheticBenchmark,
+    target: float,
+    options: dict[str, Any],
+    device: torch.device,
+    near_target_epsilon: Optional[float] = None,
+) -> list[dict[str, Any]]:
+    """Native/common errors and centered RKHS norms at each saved GP; never refit.
+
+    Evaluation values are synthetic f_noiseless (or its absolute transform),
+    never training observations. Grid construction consumes no BO RNG state.
+    """
+    n = int(options.get("n_test", 2048))
+    kind = options.get("grid", "linspace" if problem.dim == 1 else "sobol")
+    seed = int(options.get("seed", 123))
+    if n < 2 or kind not in ("linspace", "sobol"):
+        raise ValueError("generalization requires n_test >= 2 and grid linspace or sobol")
+    if kind == "linspace":
+        if problem.dim != 1:
+            raise ValueError("linspace generalization grid requires a 1D benchmark")
+        X_test = torch.linspace(float(problem.bounds[0, 0]), float(problem.bounds[1, 0]),
+                                n, dtype=torch.double, device=device).unsqueeze(-1)
+    else:
+        X_test = problem.test_set(n=n, seed=seed).to(device)
+    f_noiseless = problem.f(X_test).reshape(-1)
+    truth = _y_true_for_method(method.train_label, f_noiseless, target)
+    target_distance_truth = (f_noiseless - target).abs()
+    # A subset of the SAME noiseless grid, independent of predictions/method.
+    local_epsilon = options.get("near_target_epsilon", near_target_epsilon)
+    if local_epsilon is not None:
+        local_epsilon = float(local_epsilon)
+        if not torch.isfinite(torch.tensor(local_epsilon)) or local_epsilon < 0:
+            raise ValueError("generalization near_target_epsilon must be finite and nonnegative")
+    near_mask = (target_distance_truth <= local_epsilon if local_epsilon is not None
+                 else torch.zeros_like(target_distance_truth, dtype=torch.bool))
+    near_target = dict(epsilon=local_epsilon, n_test=int(near_mask.sum()),
+                       selection="abs(f_noiseless - target) <= epsilon on shared grid")
+    truth_scale = float(truth.std(unbiased=False))
+    grid = dict(kind=kind, n_test=n, seed=seed,
+                bounds=problem.bounds.detach().cpu().tolist())
+    reports = []
+    for snapshot in method.model_snapshots:
+        train_X, train_Y = _reconstruct_X_Y(
+            initial_design, method.trajectory[:snapshot.iteration - 1],
+            method.train_label, target, device)
+        model = _rebuild_gp_at_snapshot(snapshot, train_X, train_Y)
+        with torch.no_grad():
+            posterior = model.posterior(X_test, observation_noise=False)
+            rmse = float((posterior.mean.reshape(-1) - truth).square().mean().sqrt())
+            mean_variance = float(posterior.variance.clamp_min(0).mean())
+            mean = posterior.mean.reshape(-1)
+            # Plug-in distance prediction, not E[|f-T|] and no clipping of WRONG.
+            predicted_distance = ((mean - target).abs() if method.train_label == "y_obs"
+                                  else mean)
+            target_squared_error = (predicted_distance - target_distance_truth).square()
+            target_rmse = float(target_squared_error.mean().sqrt())
+            target_rmse_near = (float(target_squared_error[near_mask].mean().sqrt())
+                                if near_mask.any() else None)
+        reports.append(dict(
+            iteration=snapshot.iteration, train_size=len(train_X),
+            rmse=rmse, mean_posterior_variance=mean_variance,
+            normalized_rmse=rmse / truth_scale if truth_scale > 0 else None,
+            truth_scale=truth_scale, truth_quantity=method.train_label.replace("y_obs", "f_noiseless"),
+            grid=grid, kernel=snapshot.kernel_name, model_config=snapshot.model_config,
+            hyperparameters=snapshot.hyperparameters,
+            target_distance_rmse=target_rmse,
+            target_distance_rmse_near_target=target_rmse_near,
+            target_distance_truth="abs(f_noiseless - target)", target=target,
+            near_target=near_target,
+            **effective_rkhs_norm(model),
+        ))
+    return reports
+
+
 def _reconstruction_config(
     config: dict[str, Any],
     raw: RawSeedData,
@@ -551,6 +630,11 @@ def _process_one_seed(
             final=final,
             convergence=curves,
             calibrations=calibration,
+            generalization=(
+                _generalization_reports(method, raw.initial_design, problem, target,
+                                        config["generalization"], device, near_target_epsilon)
+                if config.get("generalization", {}).get("enabled", False) else []
+            ),
         )
 
     return ProcessedSeedData(

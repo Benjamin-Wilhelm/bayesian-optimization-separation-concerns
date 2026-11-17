@@ -458,7 +458,7 @@ def _aggregate_scalar_curve(
     per-column pointwise summary.  Returns ``None`` when nothing usable
     remains.
     """
-    if values.size == 0:
+    if values.size == 0 or not np.isfinite(values).any():
         return None
     finite_mask = np.isfinite(values).all(axis=1)
     clean = values[finite_mask]
@@ -573,6 +573,61 @@ def _build_calibration_curves(
         }
 
         out["methods"][m] = method_out
+    return out
+
+
+def _build_generalization_curves(
+    seeds: list[ProcessedSeedData], methods: list[str],
+    confidence: float = .95, n_bootstrap: int = 5000,
+) -> dict[str, Any]:
+    """Mean curves with pointwise bootstrap intervals, resampling whole seeds."""
+    out = dict(n_seeds=len(seeds), statistic="mean", confidence=confidence,
+               n_bootstrap=n_bootstrap, band_type="pointwise", methods={})
+    for method in methods:
+        rows = [s.methods[method].generalization for s in seeds]
+        if not any(rows):
+            continue
+        iterations = [r["iteration"] for r in rows[0]]
+        if not iterations or any([r["iteration"] for r in row] != iterations for row in rows):
+            raise ValueError("Generalization diagnostics require matching snapshots in every seed")
+        ref = rows[0][0]
+        for row in rows:
+            for report in row:
+                if any(report[k] != ref[k] for k in ("grid", "kernel", "model_config", "truth_quantity")):
+                    raise ValueError("Incompatible generalization grids or model settings")
+        curves = {}
+        optional_keys = ("effective_rkhs_norm", "effective_rkhs_norm_squared",
+                         "effective_rkhs_norm_unit_outputscale", "target_distance_rmse",
+                         "target_distance_rmse_near_target")
+        # Older processed reports remain readable. Never silently aggregate a
+        # new diagnostic over only the seeds that happen to have been upgraded.
+        available = [key for key in optional_keys if all(key in r for row in rows for r in row)]
+        metadata_keys = ("target_distance_truth", "target", "near_target")
+        metadata = {}
+        for key in metadata_keys:
+            if all(key in r for row in rows for r in row):
+                if any(r[key] != ref[key] for row in rows for r in row):
+                    raise ValueError("Incompatible target-distance diagnostic settings")
+                metadata[key] = ref[key]
+        for key in ("rmse", "normalized_rmse", "mean_posterior_variance", *available):
+            values = np.asarray([[r[key] for r in row] for row in rows], dtype=float)
+            curves[key] = _aggregate_scalar_curve(values, confidence, n_bootstrap,
+                                                   "pointwise", "mean", 0)
+        dimension = len(np.atleast_1d(ref["hyperparameters"]["lengthscale"]))
+        for d in range(dimension):
+            values = np.asarray([[np.atleast_1d(r["hyperparameters"]["lengthscale"])[d]
+                                  for r in row] for row in rows], dtype=float)
+            curves[f"lengthscale_{d}"] = _aggregate_scalar_curve(
+                values, confidence, n_bootstrap, "pointwise", "mean", 0)
+        for key in ("outputscale", "noise_variance_raw"):
+            values = np.asarray([[r["hyperparameters"].get(key, np.nan) for r in row]
+                                  for row in rows], dtype=float)
+            curves[key] = _aggregate_scalar_curve(values, confidence, n_bootstrap,
+                                                   "pointwise", "mean", 0)
+        out["methods"][method] = dict(iteration=iterations, curves=curves,
+                                      grid=ref["grid"], kernel=ref["kernel"],
+                                      model_config=ref["model_config"],
+                                      truth_quantity=ref["truth_quantity"], **metadata)
     return out
 
 
@@ -752,6 +807,12 @@ def main(argv: Optional[list[str]] = None) -> None:
             run_logger.processed_aggregate_path(benchmark, "final_performance.json"),
         )
         n_written = 4
+        if any(s.methods[m].generalization for s in seeds for m in method_names):
+            save_json(
+                _build_generalization_curves(seeds, method_names, confidence, n_bootstrap),
+                run_logger.processed_aggregate_path(benchmark, "generalization_curves.json"),
+            )
+            n_written += 1
         if aggregate_instantaneous_curves:
             save_json(
                 _build_convergence_curves(

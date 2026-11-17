@@ -169,6 +169,7 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         "final_performance",
         "calibration_summary",
         "statistical_tests",
+        "generalization_curves",
     ]
     agg: dict[str, Optional[dict]] = {}
     for name in AGG_FILES:
@@ -370,7 +371,13 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
         Y0 = np.abs(y0 - T) if "wrong" in method else y0
         kernel = str(config.get("model", {}).get("kernel", "matern52"))
         builder = GPModelBuilder(
-            GPModelConfig(noise_std=benchmark.default_noise_std, kernel=kernel)
+            GPModelConfig(
+                noise_std=benchmark.default_noise_std, kernel=kernel,
+                fixed_lengthscale=config.get("model", {}).get("fixed_lengthscale"),
+                input_bounds=(benchmark.bounds.detach().cpu().tolist()
+                              if config.get("model", {}).get("normalize_with_problem_bounds", False)
+                              else None),
+            )
         )
         model = builder.fit(
             torch.as_tensor(X0, dtype=torch.double),
@@ -803,7 +810,8 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
             it = cal_iters(method)
             ax.plot(it, np.asarray(payload["center"]), color=style["color"], lw=1.8,
                     label=style["label"])
-            ax.fill_between(it, np.asarray(payload["lower"]), np.asarray(payload["upper"]),
+            ax.fill_between(it, np.asarray(payload["lower"], dtype=float),
+                            np.asarray(payload["upper"], dtype=float),
                             color=style["color"], alpha=0.20)
         if nominal is not None:
             ax.axhline(nominal, color="grey", ls=":", lw=1.0, label=f"nominal {nominal:g}")
@@ -1129,6 +1137,43 @@ def plot_benchmark(run_dir: Path, benchmark_name: str) -> int:
     else:
         logger.info("no GP snapshots with hyperparameters found — skipping 05_gp_hyperparameters.")
 
+    # Optional native-function generalization diagnostics (mean over seeds).
+    generalization = agg.get("generalization_curves")
+    if generalization:
+        fig, axes = plt.subplots(1, 3, figsize=(15.5, 4.3))
+        for method, data in generalization["methods"].items():
+            st = style_for(method)
+            metrics = [(0, k) for k in data["curves"] if k.startswith("lengthscale_")]
+            metrics += [(1, "rmse"), (2, "mean_posterior_variance")]
+            for panel, key in metrics:
+                band = data["curves"][key]
+                if band is None:
+                    continue
+                x = data["iteration"]
+                label = st["label"] + (f" (dim {key.split('_')[-1]})" if panel == 0 else "")
+                axes[panel].plot(x, band["center"], color=st["color"], label=label)
+                if all(v is not None for v in band["lower"] + band["upper"]):
+                    axes[panel].fill_between(x, band["lower"], band["upper"],
+                                             color=st["color"], alpha=.18)
+        for ax, label in zip(axes, ("Lengthscale (input-transform units)",
+                                    "RMSE (native function units)",
+                                    "Mean latent posterior variance (native units²)")):
+            ax.set_xlabel("BO iteration (model before query)")
+            ax.set_ylabel(label)
+            ax.legend()
+        confidence_pct = 100 * generalization["confidence"]
+        fig.suptitle(f"Native model diagnostics — mean over {n_seeds} seeds, {confidence_pct:g}% bootstrap CI"
+                     "\nRIGHT models f; WRONG models |f − T| (different output scales)")
+        fig.tight_layout()
+        add_figure("05_gp_generalization", fig)
+        from experiments.exp_a_target_matching.compare_ablations import plot_rkhs_diagnostics
+        complexity_fig = plot_rkhs_diagnostics({
+            method: [(style_for(method)["label"], data)]
+            for method, data in generalization["methods"].items()
+        })
+        if complexity_fig is not None:
+            add_figure("05_gp_rkhs_complexity", complexity_fig)
+
     # ========================================================================
     # Save all figures
     # ========================================================================
@@ -1183,6 +1228,9 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--benchmark", action="append", default=None,
                         help="Filter (repeatable).  Defaults to all benchmarks.")
+    parser.add_argument("--rkhs-only", action="store_true",
+                        help="Plot saved RKHS/common-error aggregates only, without GP fitting "
+                             "or clearing other figures.")
     return parser.parse_args(argv)
 
 
@@ -1207,7 +1255,25 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     total = 0
     for benchmark in benchmarks:
-        total += plot_benchmark(run_dir, benchmark)
+        if args.rkhs_only:
+            from experiments.exp_a_target_matching.compare_ablations import plot_rkhs_diagnostics
+            data = load_json(run_dir / "processed" / "aggregate" / benchmark /
+                             "generalization_curves.json")
+            fig = plot_rkhs_diagnostics({
+                method: [(style_for(method)["label"], curves)]
+                for method, curves in data["methods"].items()
+            })
+            if fig is None:
+                logger.warning("[%s] RKHS diagnostics unavailable; reprocess saved snapshots", benchmark)
+                continue
+            out_dir = run_dir / "figures" / benchmark
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for ext in ("png", "pdf"):
+                fig.savefig(out_dir / f"05_gp_rkhs_complexity.{ext}", bbox_inches="tight")
+            plt.close(fig)
+            total += 1
+        else:
+            total += plot_benchmark(run_dir, benchmark)
     logger.info("Done: %d figure(s) across %d benchmark(s) in %s",
                 total, len(benchmarks), run_dir)
 

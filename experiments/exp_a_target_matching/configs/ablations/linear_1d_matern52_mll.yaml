@@ -1,0 +1,52 @@
+experiment: exp_a_target_matching
+tag: linear_1d_matern52_mll_3seeds
+benchmark: linear_1d
+seeds:
+- 1
+- 2
+- 3
+target: 0.6
+beta: 2.0
+initial_design_size: 1
+budget: 50
+noise_std: 0.0
+num_restarts: 20
+raw_samples: 1024
+device: cpu
+methods:
+- right_target_matching_ucb
+- wrong_gp_on_abs_lcb
+epsilon: 0.01
+failure_threshold: 0.05
+test_grid:
+  n_test: 2048
+  seed: 123
+  calibration_every: 1
+  n_test_near_target: 512
+  near_target_seed: 124
+  m_test_joint_distrib: 64
+  m_test_joint_near_target: 64
+  joint_nlpd_jitter: 1.0e-06
+near_target_epsilon: 0.02
+calibration:
+  compute_global: true
+  compute_near_target: true
+  compute_joint: false
+  store_predictions: true
+aggregate:
+  convergence_band_type: pointwise
+  calibration_band_type: pointwise
+  residual_band_type: uniform
+  n_bootstrap: 2000
+  confidence: 0.95
+  aggregate_calibration_curves: true
+  aggregate_instantaneous_curves: true
+paired_method_rng: true
+generalization:
+  enabled: true
+  grid: linspace
+  n_test: 2048
+  seed: 123
+model:
+  kernel: matern52
+  normalize_with_problem_bounds: true

@@ -119,6 +119,10 @@ def _capture_snapshot(
         noise_std=builder.config.noise_std,
         state_dict=serialize_state_dict(model),
         hyperparameters=builder.extract_hyperparameters(model),
+        model_config={
+            "fixed_lengthscale": builder.config.fixed_lengthscale,
+            "input_bounds": builder.config.input_bounds,
+        },
     )
 
 
@@ -143,10 +147,16 @@ def _run_one_method(
     num_restarts = int(config["num_restarts"])
     raw_samples = int(config["raw_samples"])
 
-    # Builder: fixed noise for RIGHT, inferred for WRONG.
+    # Both methods retain the existing fixed-noise policy.
     builder_noise = problem.default_noise_std if spec["use_fixed_noise"] else None
     kernel = str(config.get("model", {}).get("kernel", "matern52"))
-    builder = GPModelBuilder(GPModelConfig(noise_std=builder_noise, kernel=kernel))
+    model_cfg = config.get("model", {})
+    builder = GPModelBuilder(GPModelConfig(
+        noise_std=builder_noise, kernel=kernel,
+        fixed_lengthscale=model_cfg.get("fixed_lengthscale"),
+        input_bounds=(problem.bounds.detach().cpu().tolist()
+                      if model_cfg.get("normalize_with_problem_bounds", False) else None),
+    ))
 
     # Running state.  We always keep the raw y_obs and apply the method's
     # transform inside the loop so the recipe is fully reproducible by
@@ -244,6 +254,9 @@ def _run_one_seed(
 
     methods: dict[str, MethodTrajectory] = {}
     for method_name in config["methods"]:
+        if config.get("paired_method_rng", False):
+            # Common optimizer/noise RNG stream per method across ablation runs.
+            torch.manual_seed(seed)
         log.info(f"  method: {method_name}")
         methods[method_name] = _run_one_method(
             method_name=method_name,
