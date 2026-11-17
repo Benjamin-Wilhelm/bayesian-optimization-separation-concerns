@@ -1,0 +1,122 @@
+\begin{thebibliography}{15}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Astudillo and Frazier(2019)]{astudillo2019}
+Raul Astudillo and Peter~I. Frazier.
+\newblock {Bayesian Optimization of Composite Functions}.
+\newblock In \emph{Proceedings of the 36th International Conference on Machine
+  Learning (ICML)}, volume~97 of \emph{Proceedings of Machine Learning
+  Research}, pages 354--363, 2019.
+
+\bibitem[Balandat et~al.(2020)Balandat, Karrer, Jiang, Daulton, Letham, Wilson,
+  and Bakshy]{balandat2020botorch}
+Maximilian Balandat, Brian Karrer, Daniel~R. Jiang, Samuel Daulton, Benjamin
+  Letham, Andrew~Gordon Wilson, and Eytan Bakshy.
+\newblock {BoTorch: A Framework for Efficient Monte-Carlo Bayesian
+  Optimization}.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, volume~33, 2020.
+
+\bibitem[Berkenkamp et~al.(2019)Berkenkamp, Schoellig, and
+  Krause]{berkenkamp2019}
+Felix Berkenkamp, Angela~P. Schoellig, and Andreas Krause.
+\newblock {No-Regret Bayesian Optimization with Unknown Hyperparameters}.
+\newblock \emph{Journal of Machine Learning Research}, 20\penalty0
+  (50):\penalty0 1--24, 2019.
+
+\bibitem[Bogunovic and Krause(2021)]{bogunovic2021}
+Ilija Bogunovic and Andreas Krause.
+\newblock {Misspecified Gaussian Process Bandit Optimization}.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, volume~34, 2021.
+
+\bibitem[Bull(2011)]{bull2011}
+Adam~D. Bull.
+\newblock {Convergence Rates of Efficient Global Optimization Algorithms}.
+\newblock \emph{Journal of Machine Learning Research}, 12:\penalty0 2879--2904,
+  2011.
+
+\bibitem[Cheng et~al.(2024)Cheng, Miao, Dong, Yang, Gao, and Zhu]{cheng2024}
+Shuyu Cheng, Yibo Miao, Yinpeng Dong, Xiao Yang, Xiao-Shan Gao, and Jun Zhu.
+\newblock {Efficient Black-box Adversarial Attacks via Bayesian Optimization
+  Guided by a Function Prior}.
+\newblock In \emph{Proceedings of the 41st International Conference on Machine
+  Learning (ICML)}, volume 235 of \emph{Proceedings of Machine Learning
+  Research}, pages 8163--8183, 2024.
+
+\bibitem[Daulton et~al.(2020)Daulton, Balandat, and Bakshy]{daulton2020}
+Samuel Daulton, Maximilian Balandat, and Eytan Bakshy.
+\newblock {Differentiable Expected Hypervolume Improvement for Parallel
+  Multi-Objective Bayesian Optimization}.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, volume~33, pages 9851--9864, 2020.
+
+\bibitem[Golovin and Zhang(2020)]{golovin2020}
+Daniel Golovin and Qiuyi Zhang.
+\newblock {Random Hypervolume Scalarizations for Provable Multi-Objective Black
+  Box Optimization}.
+\newblock In \emph{Proceedings of the 37th International Conference on Machine
+  Learning (ICML)}, volume 119 of \emph{Proceedings of Machine Learning
+  Research}, pages 11096--11105, 2020.
+
+\bibitem[Guay~Hottin et~al.(2025)Guay~Hottin, Kardassevitch, Ph\d{a}m, Lajoie,
+  and Bonizzato]{guayhottin2025}
+Rose Guay~Hottin, Lison Kardassevitch, Ho{\`a}ng~Hi\d{\^e}p Ph\d{a}m, Guillaume
+  Lajoie, and Marco Bonizzato.
+\newblock {Robust prior-biased acquisition function for human-in-the-loop
+  Bayesian optimization}.
+\newblock \emph{Knowledge-Based Systems}, 311:\penalty0 113039, 2025.
+\newblock \doi{10.1016/j.knosys.2025.113039}.
+
+\bibitem[Hvarfner et~al.(2022)Hvarfner, Stoll, Souza, Lindauer, Hutter, and
+  Nardi]{hvarfner2022}
+Carl Hvarfner, Danny Stoll, Artur Souza, Marius Lindauer, Frank Hutter, and
+  Luigi Nardi.
+\newblock {$\pi$BO: Augmenting Acquisition Functions with User Beliefs for
+  Bayesian Optimization}.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2022.
+
+\bibitem[Kanagawa et~al.(2018)Kanagawa, Hennig, Sejdinovic, and
+  Sriperumbudur]{kanagawa2018}
+Motonobu Kanagawa, Philipp Hennig, Dino Sejdinovic, and Bharath~K.
+  Sriperumbudur.
+\newblock {Gaussian Processes and Kernel Methods: A Review on Connections and
+  Equivalences}.
+\newblock \emph{arXiv preprint arXiv:1807.02582}, 2018.
+
+\bibitem[Paria et~al.(2020)Paria, Kandasamy, and P{\'o}czos]{paria2019}
+Biswajit Paria, Kirthevasan Kandasamy, and Barnab{\'a}s P{\'o}czos.
+\newblock {A Flexible Framework for Multi-Objective Bayesian Optimization using
+  Random Scalarizations}.
+\newblock In \emph{Proceedings of the 35th Conference on Uncertainty in
+  Artificial Intelligence (UAI)}, volume 115 of \emph{Proceedings of Machine
+  Learning Research}, pages 766--776, 2020.
+
+\bibitem[Srinivas et~al.(2010)Srinivas, Krause, Kakade, and
+  Seeger]{srinivas2010}
+Niranjan Srinivas, Andreas Krause, Sham~M. Kakade, and Matthias~W. Seeger.
+\newblock {Gaussian Process Optimization in the Bandit Setting: No Regret and
+  Experimental Design}.
+\newblock In \emph{Proceedings of the 27th International Conference on Machine
+  Learning (ICML)}, pages 1015--1022, 2010.
+
+\bibitem[Wynne et~al.(2021)Wynne, Briol, and Girolami]{wynne2021}
+George Wynne, Fran\c{c}ois-Xavier Briol, and Mark Girolami.
+\newblock {Convergence Guarantees for Gaussian Process Means With Misspecified
+  Likelihoods and Smoothness}.
+\newblock \emph{Journal of Machine Learning Research}, 22\penalty0
+  (123):\penalty0 1--40, 2021.
+
+\bibitem[Zitzler and Thiele(1999)]{zitzler1999}
+Eckart Zitzler and Lothar Thiele.
+\newblock {Multiobjective Evolutionary Algorithms: A Comparative Case Study and
+  the Strength Pareto Approach}.
+\newblock \emph{IEEE Transactions on Evolutionary Computation}, 3\penalty0
+  (4):\penalty0 257--271, 1999.
+
+\end{thebibliography}

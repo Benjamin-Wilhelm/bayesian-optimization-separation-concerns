@@ -1,0 +1,125 @@
+% ======================================================================
+%  Appendix A --- Mathematical background
+% ======================================================================
+\newpage
+\section{Mathematical background}
+\label{app:background}
+
+This appendix collects the established definitions and results used in the main
+text. Everything here is standard and is stated with citations; none of it is
+claimed as a contribution. We follow Kanagawa et al.~\cite{kanagawa2018} for the
+GP/RKHS material and Srinivas et al.~\cite{srinivas2010} for the bandit analysis.
+
+\subsection{RKHS and regularity}
+
+\begin{definition}[RKHS]
+Let $k:\X\times\X\to\R$ be a positive-definite kernel. The associated RKHS $\Hk$
+is the Hilbert space of functions such that $k(x,\cdot)\in\Hk$ for all $x$ and
+$f(x)=\inner{f}{k(x,\cdot)}_{\Hk}$ for all $f\in\Hk$ (reproducing property).
+\end{definition}
+
+\begin{theorem}[Regularity transfer, {\cite{kanagawa2018}}]
+\label{app:thm-regtransfer}
+Let $m\ge1$ and $k\in C^{2m}(\X\times\X)$. Then $x\mapsto k(x,\cdot)$ is $C^m$ as
+an $\Hk$-valued map, every $f\in\Hk$ is $C^m$ on $\X$, and for every multi-index
+$\alpha$ with $|\alpha|\le m$,
+$\partial^\alpha f(x)=\inner{f}{\partial_x^\alpha k(x,\cdot)}_{\Hk}$.
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+By recursion on $m$. For $m=1$, fix $x$ and a coordinate direction $e_i$ and set
+$q_h=(k(x+he_i,\cdot)-k(x,\cdot))/h\in\Hk$. Using the reproducing property,
+$\inner{q_h}{q_{h'}}_{\Hk}$ is a second-order difference quotient of $k$, which by
+$k\in C^2$ converges to $\partial_{x_i}\partial_{y_i}k(x,x)$; hence $(q_h)$ is
+Cauchy and converges in $\Hk$ to $\partial_{x_i}k(x,\cdot)$. Continuity of
+$x\mapsto\partial_{x_i}k(x,\cdot)$ follows from continuity of the mixed
+derivative. The inductive step repeats the argument on higher-order difference
+quotients. Differentiating $f(x)=\inner{f}{k(x,\cdot)}_{\Hk}$ under the (continuous
+linear) inner product gives the derivative-reproducing identity. See
+\cite{kanagawa2018} for the complete argument.
+\end{proof}
+
+\subsection{Spectral characterization and Sobolev regularity}
+
+For a stationary kernel $k(x,x')=\psi(x-x')$ on $\R^d$, Bochner's theorem gives a
+spectral measure with density $S$, and the RKHS admits the Fourier
+characterization~\cite{kanagawa2018}
+\[
+\Hk=\Bigl\{f\in L^2(\R^d):\int\frac{|\hat f(\omega)|^2}{S(\omega)}\,d\omega<\infty\Bigr\},
+\qquad \Hnorm{f}^2=\int\frac{|\hat f(\omega)|^2}{S(\omega)}\,d\omega .
+\]
+With the Sobolev space $H^s(\R^d)=\{f:\int(1+\norm{\omega}^2)^s|\hat f|^2<\infty\}$
+and the embeddings $H^s\subset C^0$ for $s>d/2$ and $H^s\subset C^k$ for
+$s>k+d/2$, the spectral decay controls smoothness:
+\begin{itemize}
+  \item RBF: $S(\omega)\asymp e^{-\ell^2\norm{\omega}^2/2}$, so $\Hk\subset H^s$
+        for all $s$, i.e.\ $\Hk\subset C^\infty$ (real-analytic).
+  \item Mat\'ern-$\nu$: $S(\omega)\propto(\lambda^2+\norm{\omega}^2)^{-(\nu+d/2)}$,
+        so $\Hk\simeq H^{\nu+d/2}(\R^d)$; the smoothness parameter $\nu$ directly
+        sets the Sobolev order.
+  \item Linear: $\Hk=\{x\mapsto w^\top x\}$, a finite-dimensional space.
+\end{itemize}
+
+\subsection{Information gain}
+
+\begin{definition}[Maximum information gain, {\cite{srinivas2010}}]
+For a GP prior $f\sim\GP(0,k)$ and noisy observations $y_A=f_A+\eps$,
+$\eps\sim\mathcal N(0,\sigma^2 I)$, the mutual information is
+$I(y_A;f_A)=\tfrac12\log\det(I+\sigma^{-2}K_A)$, and the maximum information gain
+after $t$ evaluations is $\gain_t=\max_{|A|=t}I(y_A;f_A)$.
+\end{definition}
+
+For standard kernels~\cite{srinivas2010}: $\gain_t=O(d\log t)$ (linear),
+$\gain_t=O((\log t)^{d+1})$ (RBF),
+$\gain_t=O(t^{d(d+1)/(2\nu+d(d+1))}\log t)$ (Mat\'ern-$\nu$), with sharper recent
+Mat\'ern rates $\widetilde O(t^{d/(2\nu+d)})$.
+
+\subsection{Confidence bounds and GP-UCB regret}
+
+\begin{theorem}[High-probability confidence interval, {\cite{srinivas2010}}]
+\label{app:thm-conf}
+Assume $f\in\Hk$ with $\Hnorm{f}\le B$, observations $y_t=f(x_t)+\eps_t$ with
+conditionally $R$-sub-Gaussian noise, and posterior mean/variance
+$\mu_{t-1},\sigma^2_{t-1}$ with ridge $\lambda>0$. With
+$\beta_t=B^2+2R^2(\gain_{t-1}+\log(1/\delta))$, the event
+$\{\forall t,\forall x:\abs{f(x)-\mu_{t-1}(x)}\le\sqrt{\beta_t}\sigma_{t-1}(x)\}$
+holds with probability $\ge1-\delta$.
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+Decompose $f(x)-\mu_{t-1}(x)$ into a bias term and a noise term. The bias term is
+bounded by $B\sigma_{t-1}(x)$ via a Riesz-representation / Cauchy--Schwarz
+argument. The noise term is controlled by a self-normalized concentration
+inequality (method of mixtures / Ville's inequality applied to a supermartingale),
+giving $|k_{t-1}(x)^\top(K_{t-1}+\lambda I)^{-1}\eps_{1:t-1}|\le
+\frac{\sigma_{t-1}(x)}{\sqrt\lambda}R\sqrt{2(\gain_{t-1}+\log(1/\delta))}$.
+Combining the two terms and absorbing constants gives the stated $\beta_t$; see
+\cite{srinivas2010} and the review \cite{kanagawa2018}.
+\end{proof}
+
+\begin{lemma}[Sum of posterior variances, {\cite{srinivas2010}}]
+\label{app:lem-sumvar}
+If $k(x,x)\le1$, then
+$\sum_{t=1}^T\sigma_{t-1}^2(x_t)\le\frac{2}{\log(1+\sigma^{-2})}\gain_T$.
+\end{lemma}
+
+\begin{theorem}[GP-UCB regret, {\cite{srinivas2010}}]
+\label{app:thm-gpucb}
+Under Theorem~\ref{app:thm-conf}, the GP-UCB rule~\eqref{eq:bg-gpucb} satisfies,
+with probability $\ge1-\delta$, cumulative regret $R_T=O(\sqrt{T\beta_T\gain_T})$.
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+On the confidence event, optimism gives $f(x^\star)\le\mu_{t-1}(x_t)+
+\sqrt{\beta_t}\sigma_{t-1}(x_t)$ and the lower bound at $x_t$ gives
+$f(x_t)\ge\mu_{t-1}(x_t)-\sqrt{\beta_t}\sigma_{t-1}(x_t)$, so
+$r_t\le2\sqrt{\beta_t}\sigma_{t-1}(x_t)$. Square, sum, apply Cauchy--Schwarz and
+Lemma~\ref{app:lem-sumvar}. Full details in \cite{srinivas2010}.
+\end{proof}
+
+We also use, in Appendix~\ref{app:tm}, the noiseless projection viewpoint: the
+posterior mean is the orthogonal projection $\mu_t=\Pi_{\mathcal H_t}f$ onto
+$\mathcal H_t=\operatorname{span}\{k(x_1,\cdot),\dots,k(x_t,\cdot)\}$, and the
+posterior standard deviation is the distance
+$\sigma_t(x)=\norm{k(x,\cdot)-\Pi_{\mathcal H_t}k(x,\cdot)}_{\Hk}$
+\cite{kanagawa2018}.

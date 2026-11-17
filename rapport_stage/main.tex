@@ -1,0 +1,49 @@
+% ======================================================================
+%  Separation of Concerns in Gaussian-Process Bayesian Optimization
+%  Research internship report
+%  Benjamin Wilhelm --- sciNeurotech Lab (Polytechnique Montreal)
+%  Supervisor: Marco Bonizzato
+%
+%  Compile:  pdflatex main  ->  bibtex main  ->  pdflatex main x2
+%  (or simply:  latexmk -pdf main )
+% ======================================================================
+\documentclass[11pt,a4paper]{article}
+
+\input{preamble}
+
+\begin{document}
+
+% ---- Front matter ------------------------------------------------------
+\input{frontmatter/coverpage}
+\input{frontmatter/plagiarism}
+\input{frontmatter/acknowledgements}
+
+\pagenumbering{roman}
+\input{sections/abstract}
+\newpage
+\tableofcontents
+\newpage
+\pagenumbering{arabic}
+
+% ---- Main text ---------------------------------------------------------
+\input{sections/introduction}
+\input{sections/background}
+\input{sections/contrib_target_matching}
+\input{sections/contrib_multiobjective}
+\input{sections/contrib_prior_guided}
+\input{sections/discussion}
+\input{sections/conclusion}
+
+% ---- Bibliography ------------------------------------------------------
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+% ---- Appendices --------------------------------------------------------
+\appendix
+\input{appendices/appendixA_background}
+\input{appendices/appendixB_target_matching}
+\input{appendices/appendixC_prior_guided}
+\input{appendices/appendixD_multiobjective}
+\input{appendices/appendixE_experiments}
+
+\end{document}

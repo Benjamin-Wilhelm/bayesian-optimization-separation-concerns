@@ -1,0 +1,130 @@
+% ======================================================================
+%  Appendix D --- Multi-objective technical details
+% ======================================================================
+\section{Multi-objective technical details}
+\label{app:mo}
+
+This appendix separates cleanly the imported results (Golovin and
+Zhang~\cite{golovin2020}, Paria et al.~\cite{paria2019}) from the personal
+pushforward-confidence proof. Every imported statement is labelled with its
+citation.
+
+\subsection{Scalarizations and Lipschitz constants (background)}
+
+We work in the maximization convention on a box $F(\X)\subseteq[0,B]^m$.
+\begin{itemize}
+  \item \emph{Linear} $\prm_\lambda(y)=\sum_i\lambda_i y_i$, $\lambda\in\Delta_m$:
+        monotone, complete only on convex fronts; $L_{\mathrm{lin}}=\norm{\lambda}_1=1$.
+  \item \emph{Chebyshev} $\prm_\lambda(y)=\min_i\lambda_i(y_i-z_i)$: monotone and
+        complete~\cite{paria2019}; $L_{\mathrm{cheb}}=\max_i\lambda_i\le1$.
+  \item \emph{Target matching} $\prm(y)=-\abs{y-T}$, $m=1$: non-monotone,
+        $1$-Lipschitz (this is the case recovered in Appendix~\ref{app:tm}).
+  \item \emph{Hypervolume} $\prm_\lambda(y)=\min_i(\max(0,(y_i-z_i)/\lambda_i))^m$,
+        $\lambda\in\mathcal S_+^{m-1}$: monotone and complete
+        \cite[Lemma~6]{golovin2020}; $\ell^\infty$-Lipschitz with
+        $L_{\mathrm{HV}}=O(B^m m^{1+m/2})$, finite and uniform in $\lambda$.
+\end{itemize}
+
+\subsection{Pushforward confidence and regret bound (personal contribution)}
+
+\begin{theorem}[Pushforward confidence and regret, restated]
+\label{app:thm-pushforward}
+For $i=1,\dots,m$ let $f_i\in\mathcal H_{k_i}$, $\norm{f_i}_{\mathcal H_{k_i}}\le B_i$,
+observed with conditionally $R_i$-sub-Gaussian noise; maintain one GP per
+objective, $\mu_{i,t},\sigma_{i,t}$. Let $\prm:\R^m\to\R$ be $L$-Lipschitz w.r.t.\
+$\norm{\cdot}_\infty$, $g=\prm\circ F$. Choose $\beta_t$ so that the joint event
+$\mathbb E=\{\abs{f_i(x)-\mu_{i,t-1}(x)}\le\sqrt{\beta_t}\sigma_{i,t-1}(x)\
+\forall x,t,i\}$ holds w.p.\ $\ge1-\delta$. With confidence boxes
+$C_{i,t}(x)=[\mu_{i,t-1}\pm\sqrt{\beta_t}\sigma_{i,t-1}](x)$ and the optimistic
+pushforward acquisition $U_t(x)=\sup\{\prm(u):u_i\in C_{i,t}(x)\}$, the choice
+$x_t\in\argmax_x U_t(x)$ gives on $\mathbb E$:
+$R_T^g=\sum_t(g(x^\star)-g(x_t))\le C\,L\sqrt{T\beta_T\sum_i\gain_{i,T}}
+=O(L\sqrt{mT\beta_T\gain_T})$.
+\end{theorem}
+
+\begin{proof}
+\emph{Optimism.} On $\mathbb E$, $F(x)\in C_t(x):=\prod_i C_{i,t}(x)$ for all $x$,
+so $g(x)=\prm(F(x))\le U_t(x)$; in particular
+$g(x^\star)\le U_t(x^\star)\le U_t(x_t)$.
+\emph{Instantaneous regret.} $g(x^\star)-g(x_t)\le U_t(x_t)-g(x_t)$. For any
+$u\in C_t(x_t)$ and each $i$, $\abs{u_i-f_i(x_t)}\le\abs{u_i-\mu_{i,t-1}(x_t)}
++\abs{\mu_{i,t-1}(x_t)-f_i(x_t)}\le2\sqrt{\beta_t}\sigma_{i,t-1}(x_t)$, so
+$\norm{u-F(x_t)}_\infty\le2\sqrt{\beta_t}\max_i\sigma_{i,t-1}(x_t)$. The
+$L$-Lipschitz property gives
+$\prm(u)-\prm(F(x_t))\le2L\sqrt{\beta_t}\max_i\sigma_{i,t-1}(x_t)$, and taking the
+supremum over $u\in C_t(x_t)$,
+$U_t(x_t)-g(x_t)\le2L\sqrt{\beta_t}\max_i\sigma_{i,t-1}(x_t)$.
+\emph{Summation.} Using $\max_i\sigma_{i,t-1}^2\le\sum_i\sigma_{i,t-1}^2$,
+Cauchy--Schwarz and Lemma~\ref{app:lem-sumvar} per objective,
+$R_T^g\le2L\sqrt{\beta_T}\sum_t\max_i\sigma_{i,t-1}(x_t)
+\le2L\sqrt{T\beta_T\sum_{i,t}\sigma_{i,t-1}^2(x_t)}
+\le CL\sqrt{T\beta_T\sum_i\gain_{i,T}}$, and $\sum_i\gain_{i,T}\le m\gain_T$.
+\end{proof}
+
+\begin{remark}[Monotone case]
+If $\prm$ is coordinate-wise non-decreasing, the supremum defining $U_t$ is
+attained at the upper corner,
+$U_t(x)=\prm(\mu_{1,t-1}+\sqrt{\beta_t}\sigma_{1,t-1},\dots)$, recovering the
+``form UCB per objective, then scalarize'' rule. Monotonicity is not needed for
+the bound; only Lipschitz continuity is used, which is why target matching
+($m=1$, $\prm(u)=-\abs{u-T}$) is a corollary:
+$U_t(x)=\sup_{u\in C_t(x)}-\abs{u-T}=-\dist(T,C_t(x))$.
+\end{remark}
+
+\subsection{Random hypervolume scalarizations (imported from Golovin--Zhang)}
+
+The following are stated for completeness with their original attribution; they
+are \emph{not} contributions of this report.
+
+\begin{lemma}[Hypervolume-as-scalarization identity, {\cite[Lemma~5]{golovin2020}}]
+\label{app:lem-hvid}
+With $\prm_\lambda(y)=\min_i(\max(0,y_i/\lambda_i))^m$, for finite
+$Y\subseteq\R^m$ and reference $z$,
+$\HV_z(Y)=c_m\,\E_{\lambda\sim\mathcal S_+^{m-1}}[\max_{y\in Y}\prm_\lambda(y-z)]$,
+$c_m=\pi^{m/2}/(2^m\Gamma(m/2+1))$.
+\end{lemma}
+
+\begin{lemma}[Hypervolume concentration, {\cite[Lemma~6]{golovin2020}}]
+\label{app:lem-hvconc}
+For $Y\subseteq[z,z+B\mathbf 1_m]$ and $\lambda_1,\dots,\lambda_s\sim\mathcal S_+^{m-1}$
+i.i.d., $\bigl|\tfrac1{c_m}\HV_z(Y)-\tfrac1s\sum_j\max_{y\in Y}\prm_{\lambda_j}(y-z)\bigr|\le\eps$
+w.p.\ $\ge1-\delta$ provided $s=O(B^{2m}m^m\log(1/\delta)/\eps^2)$; and each
+$\prm_\lambda$ is $O(B^m m^{1+m/2})$-Lipschitz on $[z,z+B\mathbf 1_m]$.
+\end{lemma}
+
+\begin{theorem}[Random-scalarization regret, {\cite[Theorem~7]{golovin2020}}]
+\label{app:thm-randreg}
+If each $f_j$ is a GP draw with marginal variance $\le1$, noises are independent
+with variance $\le\sigma^2\le1$, $\gain_{T,j}\le\gain_T$, and every $\prm_\lambda$
+is $L_\rho$-Lipschitz uniformly in $\lambda$, then Algorithm~1 of
+\cite{golovin2020} (resample $\lambda_t$ each round, one GP per objective, scalarize
+the acquisition) with UCB or Thompson sampling satisfies
+$\E[R_T^{\mathrm{rand}}]=O(L_\rho\,m\,d^{1/2}\sqrt{\gain_T T\log T})$.
+\end{theorem}
+
+\begin{theorem}[Hypervolume regret and Pareto reduction, {\cite[Theorems~8--9]{golovin2020}}]
+\label{app:thm-hvreg}
+Under the hypotheses of Theorem~\ref{app:thm-randreg} with the hypervolume
+scalarization, Algorithm~1 satisfies
+$\E[\HV_z(Y^\star)-\HV_z(Y_T)]=O(m^2 d^{1/2}\sqrt{\gain_T\log(T)/T})$; and the
+generic reduction (Algorithm~2 of \cite{golovin2020}) turns any $\eps_T$-accurate
+single-objective optimizer into a hypervolume-accurate multi-objective procedure
+using $l=\widetilde O((2B)^{m^2}m^{m+1}/(c_m^{m-1}\eps_T^{m+1}))$ scalarizations.
+\end{theorem}
+
+\begin{remark}[Our re-derivation and the two routes]
+Theorem~\ref{app:thm-randreg} is a time-varying extension of
+Theorem~\ref{app:thm-pushforward}: applying the instantaneous pushforward argument
+round by round with a freshly sampled $\lambda_t$, then taking conditional
+expectation over $\lambda_t$, reproduces the same order with the uniform factor
+$L_\rho$. This is a re-statement in our language, not a new rate. The comparison
+of the two front-recovery routes ($l$ independent runs, Theorem~\ref{app:thm-hvreg}
+generic reduction, vs one shared model, Theorem~\ref{app:thm-randreg}) and the
+information-sharing interpretation are discussed in
+Section~\ref{sec:contrib-mo-sharing}; the structural point --- a single vector
+observation $F(x_t)$ is valid for every future preference only because the model
+is preference-independent --- is the separation-of-concerns content, and the
+$l$-independent route is insensitive to which surrogate (\RIGHT/\WRONG) is used
+whereas the shared route is intrinsically tied to \RIGHT-style objective-wise
+surrogates.
+\end{remark}

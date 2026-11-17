@@ -1,0 +1,111 @@
+\babel@toc {english}{}\relax 
+\contentsline {section}{\numberline {1}Introduction}{1}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Scientific and laboratory context}{1}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}One phenomenon, several decision problems}{1}{subsection.1.2}%
+\contentsline {subsection}{\numberline {1.3}Separation of concerns}{1}{subsection.1.3}%
+\contentsline {subsection}{\numberline {1.4}Research questions}{2}{subsection.1.4}%
+\contentsline {subsection}{\numberline {1.5}Contributions}{2}{subsection.1.5}%
+\contentsline {subsection}{\numberline {1.6}Organization of the report}{3}{subsection.1.6}%
+\contentsline {section}{\numberline {2}Background and critical state of the art}{4}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Gaussian-process Bayesian optimization}{4}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}RKHS assumptions and why kernel choice is a regularity assumption}{5}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Composite Bayesian optimization: a direct predecessor}{5}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}Misspecification: leaving the RKHS need not mean failure}{6}{subsection.2.4}%
+\contentsline {paragraph}{$\varepsilon $-misspecified GP bandits.}{6}{section*.3}%
+\contentsline {paragraph}{Convergence despite smoothness misspecification.}{6}{section*.4}%
+\contentsline {paragraph}{Consequence for our programme.}{6}{section*.5}%
+\contentsline {paragraph}{Online hyperparameter estimation.}{7}{section*.6}%
+\contentsline {subsection}{\numberline {2.5}Multi-objective Bayesian optimization}{7}{subsection.2.5}%
+\contentsline {subsection}{\numberline {2.6}Prior-guided Bayesian optimization: two meanings of ``prior''}{7}{subsection.2.6}%
+\contentsline {paragraph}{A spatial prior at the decision level.}{8}{section*.7}%
+\contentsline {paragraph}{A functional prior at the model level.}{8}{section*.8}%
+\contentsline {paragraph}{The gap we address.}{8}{section*.9}%
+\contentsline {subsection}{\numberline {2.7}Critical synthesis: the gap addressed by this internship}{8}{subsection.2.7}%
+\contentsline {section}{\numberline {3}Separation of concerns: target matching}{8}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Two formulations}{9}{subsection.3.1}%
+\contentsline {paragraph}{Separated / \textsc {Right}.}{9}{section*.10}%
+\contentsline {paragraph}{Task-in-model / \textsc {Wrong}.}{9}{section*.11}%
+\contentsline {subsection}{\numberline {3.2}From a qualitative obstruction to a quantitative barrier}{9}{subsection.3.2}%
+\contentsline {paragraph}{Step 1 --- a transverse crossing creates a cusp.}{9}{section*.12}%
+\contentsline {paragraph}{Step 2 --- qualitative non-membership.}{9}{section*.13}%
+\contentsline {paragraph}{Step 3 --- why non-membership is too weak.}{10}{section*.14}%
+\contentsline {paragraph}{Step 4 --- the quantitative approximation problem.}{10}{section*.15}%
+\contentsline {subsection}{\numberline {3.3}The positive result: separation preserves the GP-UCB guarantee}{11}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Experiment A --- target matching}{12}{subsection.3.4}%
+\contentsline {paragraph}{Question / hypothesis.}{12}{section*.17}%
+\contentsline {paragraph}{Compared methods.}{12}{section*.18}%
+\contentsline {paragraph}{Benchmarks, dimension, target.}{12}{section*.19}%
+\contentsline {paragraph}{Kernel and hyperparameter fitting.}{12}{section*.20}%
+\contentsline {paragraph}{Exploration schedule $\beta _t$.}{12}{section*.21}%
+\contentsline {paragraph}{Noise, input/output transforms.}{13}{section*.22}%
+\contentsline {paragraph}{Initial design and budget.}{13}{section*.23}%
+\contentsline {paragraph}{Seeds and acquisition optimization.}{13}{section*.24}%
+\contentsline {paragraph}{Metrics.}{13}{section*.25}%
+\contentsline {paragraph}{Aggregation and confidence.}{13}{section*.26}%
+\contentsline {paragraph}{Results and interpretation.}{13}{section*.27}%
+\contentsline {section}{\numberline {4}Separation of concerns: multi-objective optimization}{16}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Pareto framework and scalarization (background)}{16}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Right and wrong for a fixed scalarization}{16}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Pushforward confidence and regret bound}{17}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Beyond a single preference: hypervolume and random scalarizations}{17}{subsection.4.4}%
+\contentsline {subsection}{\numberline {4.5}Two strategies, and the separation-of-concerns reading}{18}{subsection.4.5}%
+\contentsline {subsection}{\numberline {4.6}Experiment C --- multi-objective optimization}{18}{subsection.4.6}%
+\contentsline {paragraph}{Question / hypothesis.}{18}{section*.33}%
+\contentsline {paragraph}{Benchmarks, dimension.}{18}{section*.34}%
+\contentsline {paragraph}{Scalarizations and preference protocol.}{18}{section*.35}%
+\contentsline {paragraph}{Reference point and dominance.}{19}{section*.36}%
+\contentsline {paragraph}{Kernel, transforms, noise, hyperparameters.}{19}{section*.37}%
+\contentsline {paragraph}{Exploration schedule.}{19}{section*.38}%
+\contentsline {paragraph}{Budget, initial design, seeds.}{19}{section*.39}%
+\contentsline {paragraph}{Metrics.}{19}{section*.40}%
+\contentsline {paragraph}{Aggregation and confidence.}{19}{section*.41}%
+\contentsline {paragraph}{Results and interpretation.}{19}{section*.42}%
+\contentsline {section}{\numberline {5}Separation of concerns: prior-guided optimization}{20}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Two meanings of ``prior'': spatial vs functional}{21}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}\textsc {Right}: the prior in the acquisition ($\alpha $-$\pi $BO)}{21}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}\textsc {Wrong}: the prior in the GP mean, and when it is (not) safe}{21}{subsection.5.3}%
+\contentsline {paragraph}{Marginal-likelihood estimation is only locally informed.}{22}{section*.45}%
+\contentsline {paragraph}{Self-confirming feedback under adaptive sampling.}{22}{section*.46}%
+\contentsline {subsection}{\numberline {5.4}Experiment B --- prior-guided optimization}{23}{subsection.5.4}%
+\contentsline {paragraph}{Question / hypothesis.}{23}{section*.47}%
+\contentsline {paragraph}{Compared methods.}{23}{section*.48}%
+\contentsline {paragraph}{Benchmarks, dimension, priors.}{23}{section*.49}%
+\contentsline {paragraph}{Kernel, transforms, noise, hyperparameters.}{23}{section*.50}%
+\contentsline {paragraph}{Exploration schedule and $\alpha $.}{23}{section*.51}%
+\contentsline {paragraph}{Budget, initial design, seeds.}{24}{section*.52}%
+\contentsline {paragraph}{Metrics.}{24}{section*.53}%
+\contentsline {paragraph}{Aggregation and confidence.}{24}{section*.54}%
+\contentsline {paragraph}{Results and interpretation.}{24}{section*.55}%
+\contentsline {section}{\numberline {6}Discussion and limitations}{26}{section.6}%
+\contentsline {paragraph}{Theorem vs empirical observation vs interpretation vs open problem.}{26}{section*.60}%
+\contentsline {paragraph}{RKHS misspecification does not imply empirical failure.}{26}{section*.61}%
+\contentsline {paragraph}{The approximation barrier is not a lower regret bound.}{26}{section*.62}%
+\contentsline {paragraph}{Hyperparameter re-estimation.}{26}{section*.63}%
+\contentsline {paragraph}{Noise, rough kernels, probabilistic misspecification.}{27}{section*.64}%
+\contentsline {paragraph}{Limitations of the multi-objective study.}{27}{section*.65}%
+\contentsline {paragraph}{Constrained BO as future work.}{27}{section*.66}%
+\contentsline {section}{\numberline {7}Conclusion}{27}{section.7}%
+\contentsline {section}{\numberline {A}Mathematical background}{30}{appendix.A}%
+\contentsline {subsection}{\numberline {A.1}RKHS and regularity}{30}{subsection.A.1}%
+\contentsline {subsection}{\numberline {A.2}Spectral characterization and Sobolev regularity}{30}{subsection.A.2}%
+\contentsline {subsection}{\numberline {A.3}Information gain}{30}{subsection.A.3}%
+\contentsline {subsection}{\numberline {A.4}Confidence bounds and GP-UCB regret}{31}{subsection.A.4}%
+\contentsline {section}{\numberline {B}Task-induced regularity and target matching}{31}{appendix.B}%
+\contentsline {subsection}{\numberline {B.1}Loss of differentiability and non-membership}{31}{subsection.B.1}%
+\contentsline {subsection}{\numberline {B.2}Besov threshold of a one-dimensional kink}{32}{subsection.B.2}%
+\contentsline {subsection}{\numberline {B.3}Quantitative approximation barrier}{36}{subsection.B.3}%
+\contentsline {subsection}{\numberline {B.4}Target-matching regret guarantee}{38}{subsection.B.4}%
+\contentsline {section}{\numberline {C}Prior-guided Bayesian optimization}{38}{appendix.C}%
+\contentsline {subsection}{\numberline {C.1}Safe UCB adaptation of the spatial prior}{38}{subsection.C.1}%
+\contentsline {subsection}{\numberline {C.2}Residual GP and the fixed functional prior}{39}{subsection.C.2}%
+\contentsline {subsection}{\numberline {C.3}Marginal-likelihood estimation is only locally informed}{39}{subsection.C.3}%
+\contentsline {subsection}{\numberline {C.4}Adaptive sampling and a self-confirming failure}{40}{subsection.C.4}%
+\contentsline {section}{\numberline {D}Multi-objective technical details}{41}{appendix.D}%
+\contentsline {subsection}{\numberline {D.1}Scalarizations and Lipschitz constants (background)}{41}{subsection.D.1}%
+\contentsline {subsection}{\numberline {D.2}Pushforward confidence and regret bound (personal contribution)}{41}{subsection.D.2}%
+\contentsline {subsection}{\numberline {D.3}Random hypervolume scalarizations (imported from Golovin--Zhang)}{42}{subsection.D.3}%
+\contentsline {section}{\numberline {E}Experimental reproducibility}{43}{appendix.E}%
+\contentsline {subsection}{\numberline {E.1}Global conventions}{43}{subsection.E.1}%
+\contentsline {subsection}{\numberline {E.2}Experiment A --- target matching}{43}{subsection.E.2}%
+\contentsline {subsection}{\numberline {E.3}Experiment B --- prior-guided optimization}{44}{subsection.E.3}%
+\contentsline {subsection}{\numberline {E.4}Experiment C --- multi-objective optimization}{45}{subsection.E.4}%

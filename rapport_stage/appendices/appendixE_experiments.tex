@@ -1,0 +1,162 @@
+% ======================================================================
+%  Appendix E --- Experimental reproducibility
+% ======================================================================
+\section{Experimental reproducibility}
+\label{app:exp}
+
+This appendix records the methodological choices actually used in the
+report-relevant runs. We describe the \emph{principle} of each experiment, its
+benchmarks, its reproducibility conventions and its parameters, without
+low-level implementation detail.
+
+\subsection{Global conventions}
+
+All three experiments share: a paired design (within a seed, the Sobol initial
+design is drawn once and passed identically to every compared method, which
+validates the paired Wilcoxon test); evaluation on the \emph{noiseless} benchmark
+value (never on the noisy observation the GP trained on); input normalization to
+the unit cube and output standardization, both refit at every iteration; and
+Mat\'ern-$5/2$ ARD kernels with BoTorch default Gamma hyperpriors, with
+hyperparameters refit from scratch by exact marginal likelihood at every BO
+iteration. Regret is a loss (lower is better) reaching $0$ at the optimum. Runs
+are noiseless ($\sigma=0$); Experiments A/B build a fixed-noise GP with variance
+floored to $10^{-6}$, whereas Experiment~C uses an inferred-noise
+\texttt{SingleTaskGP}. Statistics use the median across seeds; A/B use $95\%$
+pointwise bootstrap bands ($10\,000$ resamples over seeds), C uses $25$--$75$
+inter-seed percentile bands. Implementation is in BoTorch~\cite{balandat2020botorch}.
+
+\subsection{Experiment A --- target matching}
+
+Problem $\min_x\abs{f(x)-T}$; \RIGHT{} trains on raw $y$, \WRONG{} on
+$\abs{y-T}$; both analytic sequential UCB-type acquisitions
+(Section~\ref{sec:contrib-tm-exp}).
+
+\begin{table}[htbp]\centering\small
+\caption{Experiment~A benchmarks (all noiseless, Mat\'ern-$5/2$, $100$ seeds).}
+\label{tab:expA}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Benchmark & $d$ & domain & target $T$ & budget & $n_{\mathrm{init}}$ \\
+\midrule
+\texttt{linear\_1d} & 1 & $[0,1]$ & 0.6 & 50 & 1 \\
+\texttt{exponential\_1d} & 1 & $[0,1]$ & 0.6 & 50 & 1 \\
+\texttt{gaussian\_trap\_1d} & 1 & $[0,1]$ & 0.38 & 50 & 1 \\
+\texttt{gaussian\_trap\_1d\_thin} & 1 & $[0,1]$ & 0.41 & 50 & 1 \\
+\texttt{gaussian\_trap\_1d\_shifted} & 1 & $[0,1]$ & 0.095 & 50 & 1 \\
+\texttt{gaussian\_trap\_1d\_deep} & 1 & $[0,1]$ & 0.44 & 50 & 1 \\
+\texttt{branin\_2d} & 2 & $[0,5.5]\times[-2,6]$ & 5.0 & 50 & 4 \\
+\texttt{hartmann\_6d} & 6 & $[0,1]^6$ & $-2.5$ & 100 & 12 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{description}
+  \item[Seeds] $100$ (integers $1$--$100$).
+  \item[Kernel / hyperparameters] Mat\'ern-$5/2$ ARD; MLL, refit each iteration.
+        Mat\'ern-$1/2$ and RBF only in ablation folders.
+  \item[$\beta_t$] \texttt{matern\_gamma} GP-UCB schedule,
+        $\sqrt{\beta_t}=B+R\sqrt{2(\gain_{t-1}+1+\ln(1/\delta))}$ with
+        $B=1,R=1,\delta=0.1,\nu=2.5$, information-gain proxy
+        $\gain_s=\text{scale}\,(s+1)^p\ln(s+1)$, $p=d(d+1)/(2\nu+d(d+1))$,
+        $\text{scale}=0.1$; applied identically to \RIGHT{} and \WRONG{}
+        (numerically e.g.\ $\beta_1=12.745$).
+  \item[Metrics] target-matching simple regret (primary), running-best and
+        instantaneous target distance, cumulative target regret, hitting time,
+        failure rate; calibration diagnostics (NLPD incl.\ folded-normal
+        pushforward, empirical and near-target coverage, PIT, standardized
+        residuals, confidence-violation rate) at checkpoints
+        (\texttt{calibration\_every}$=5$ Branin/Hartmann, $1$ traps).
+  \item[Analysis] paired one-sided Wilcoxon (\RIGHT{} vs \WRONG),
+        Mann--Whitney~$U$, rank-biserial, Cohen's~$d$.
+\end{description}
+
+
+\subsection{Experiment B --- prior-guided optimization}
+
+Problem: single-objective maximization of the oriented objective with a spatial
+prior; the question is where the prior enters (Section~\ref{sec:contrib-prior-exp}).
+Prior bump $\pi_c(x)=\exp(-\tfrac12\sum_j((x_j-c_j)/\ell_j)^2)$. Methods:
+\texttt{vanilla\_ucb}; \texttt{alpha\_pi\_ucb} (\RIGHT, prior in the exploration
+bonus, $\alpha$ fixed); \texttt{lambda\_pi\_fixed\_standardized\_ucb} (\WRONG,
+prior as GP mean, $\lambda=1$); \texttt{lambda\_pi\_adaptive\_standardized\_ucb}
+(\WRONG, $\lambda$ learned by MLL, refit each iteration).
+
+\begin{table}[htbp]\centering\small
+\caption{Experiment~B benchmarks and priors (noiseless, Mat\'ern-$5/2$, $50$ seeds).}
+\label{tab:expB}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Benchmark & $d$ & domain & good-prior centre ($\ell$) & bad-prior centre ($\ell$) \\
+\midrule
+\texttt{double\_gaussian\_well\_1d} & 1 & $[0,1]$ & 0.70 ($0.10$) & 0.25 ($0.10$) \\
+\texttt{forrester\_1d} & 1 & $[0,1]$ & 0.7572 ($0.15$) & 0.10 ($0.15$) \\
+\texttt{branin\_2d} & 2 & $[0,5.5]\times[-2,6]$ & $(\pi,2.275)$ ($[0.825,1.2]$) & $(0.5,-1.5)$ ($[0.825,1.2]$) \\
+\texttt{hartmann\_6d} & 6 & $[0,1]^6$ & optimizer ($0.2$) & $(.9,.9,.1,.9,.9,.1)$ ($0.2$) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{description}
+  \item[Seeds] $50$ ($1$--$50$).
+  \item[$\beta_t$] \texttt{log} schedule $\beta_t=8+\ln(t+1)$ for all methods.
+  \item[$\alpha$] $0.25$ (double well), $0.5$ (Forrester, Branin, Hartmann-6D).
+  \item[Budget / init] $50$ (double well / Forrester / Branin), $80$
+        (Hartmann-6D); Sobol init $1$ (1-D), $4$ (Branin), $12$ (Hartmann-6D).
+        Fixed-bounds input normalization for all methods.
+  \item[Metrics] best-so-far simple regret (primary), instantaneous and
+        cumulative regret, final-regret distribution, AUC, hitting time
+        ($\eps=0.35/1.0/4.0/0.2$ for double well / Forrester / Branin /
+        Hartmann-6D) and failure rate, $\widehat\lambda_t$ trajectory, and a
+        prior-region calibration diagnostic (restricted to $\{\pi\ge\text{thr}\}$,
+        thr $=0.5$ or $0.2$ for Hartmann-6D).
+  \item[Analysis] paired one-sided Wilcoxon vs \texttt{vanilla\_ucb}, with the
+        same secondary effect sizes as Experiment~A.
+\end{description}
+
+
+\subsection{Experiment C --- multi-objective optimization}
+
+Bi-objective ($m=2$) scalarization comparing where the scalarization is applied
+(Section~\ref{sec:contrib-mo-exp}). Benchmarks \texttt{zdt1} (convex front) and
+\texttt{zdt2} (concave, non-supported region), $d\in\{2,6\}$. Oriented
+maximization $F=-f_{\mathrm{raw}}$; fixed reference $z=(-1.1,-1.1)$; exact 2-D
+hypervolume. Two scalarizations, \texttt{linear} and \texttt{hypervolume}. Two
+modes: \emph{fixed} (independent scalarized runs over an angle grid
+$\theta\in\{10,30,45,60,80\}^\circ$) and \emph{pareto} (global budget $500$,
+hypervolume only, shared resampled-preference algorithm vs independent subruns;
+$2048$ evaluation preferences from an independent shared RNG).
+
+\begin{table}[htbp]\centering\small
+\caption{Experiment~C run settings ($50$ seeds, Mat\'ern-$5/2$, inferred-noise GP).}
+\label{tab:expC}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Setting & \texttt{fixed\_scalarization} & \texttt{pareto\_front} \\
+\midrule
+budget $N$ (incl.\ init) & $d2{=}50$; $d6{=}200$ & $500$ (global) \\
+initial design & $d2{=}5$; $d6{=}12$ & Alg-1 $=5$; Alg-2 $=2$/subrun \\
+seeds present & $50$ (except \texttt{fixed\_zdt2\_d6}: 42/41) & $50$ \\
+scalarizations & linear $+$ hypervolume & hypervolume only \\
+preference grid / $L$ & angles $\{10,30,45,60,80\}$ & Alg-2 $L{=}10$; eval $2048$ \\
+$\beta$ schedule & \texttt{log} ($8{+}\ln(t{+}1)$) and \texttt{beta8} ($\equiv8$) & same \\
+acq.\ optimizer & $20$ restarts, $1024$ raw, $q{=}1$ & same \\
+noise model & inferred-noise \texttt{SingleTaskGP} & same \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{description}
+  \item[Metrics] fixed mode: scalarized best-so-far, scalarized simple regret
+        $\prm^\star-b_t$ (primary), instantaneous and cumulative scalarized
+        regret. Pareto mode: exact running hypervolume, hypervolume regret
+        $\HV^\star-\HV_z(Y_t)$, empirical-Bayes scalarized regret over $2048$
+        preferences. Front dominated/non-dominated masks are diagnostic only (no
+        aggregated coverage metric); no calibration diagnostics.
+  \item[Analysis] median curves with $25$--$75$ percentile bands; final-value
+        summaries; paired one-sided Wilcoxon (fixed mode only, \WRONG$-$\RIGHT);
+        no paired test in the pareto pipeline; bootstrap not used in
+        Experiment~C.
+\end{description}
+
+
+

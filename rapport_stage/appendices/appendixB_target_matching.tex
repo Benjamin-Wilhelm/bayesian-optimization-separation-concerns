@@ -1,0 +1,525 @@
+% ======================================================================
+%  Appendix B --- Task-induced regularity and target matching
+% ======================================================================
+\section{Task-induced regularity and target matching}
+\label{app:tm}
+
+This appendix gives the full statements and proofs behind
+Section~\ref{sec:contrib-tm}: the non-membership result, the transverse-kink
+normal form and its Sobolev threshold, the higher-order matching defect, the RKHS
+non-membership corollary, the quantitative approximation barrier with its
+matching one-dimensional upper bound, and the target-matching regret guarantee.
+
+\subsection{Loss of differentiability and non-membership}
+
+\begin{proof}[Proof of Proposition~\ref{prop:tm-nonmember}]
+Let $h=f-T$ and $g=\abs{h}$. Since $f\in C^1$ and $f(x_0)=T$, $h$ is
+differentiable at $x_0$ with $h(x_0)=0$, so $h(x_0+tv)=t\nabla h(x_0)^\top v+o(t)$.
+Choose $v$ with $\nabla h(x_0)^\top v\neq0$ (possible since $\nabla f(x_0)\neq0$).
+Then the directional difference quotient of $g$ satisfies
+$\lim_{t\to0^+}\frac{g(x_0+tv)-g(x_0)}{t}=\abs{\nabla h(x_0)^\top v}$ while
+$\lim_{t\to0^-}=-\abs{\nabla h(x_0)^\top v}$; the two one-sided limits differ, so
+$g$ is not differentiable at $x_0$. If $\Hk\subset C^1(\X)$ then every element of
+$\Hk$ is differentiable everywhere; hence $g\notin\Hk$.
+\end{proof}
+
+\begin{remark}
+The transversality $\nabla f(x_0)\neq0$ is necessary: if $\nabla f(x_0)=0$ the
+level set may be tangent and $\abs{f-T}$ may stay smooth (e.g.\ $f(x)=x^2$,
+$T=0$, giving $\abs{f-T}=x^2\in C^\infty$).
+\end{remark}
+
+\subsection{Besov threshold of a one-dimensional kink}
+
+\begin{lemma}[Besov regularity of the model profile]
+\label{app:lem-besov}
+Let $\phi\in C_c^\infty(\R)$ with $\phi\equiv1$ near $0$. Then
+$w(u)=\phi(u)\abs{u}$ satisfies $w\in H^s(\R)$ for all $s<3/2$ and
+$w\notin H^{3/2}(\R)$; more precisely $w\in B^{3/2}_{2,\infty}(\R)$ but
+$w\notin B^{3/2}_{2,2}(\R)=H^{3/2}(\R)$.
+\end{lemma}
+
+\begin{proof}
+Since $|u|\in L^1_{\mathrm{loc}}(\R)$, its distributional derivatives are
+well-defined. For any $\psi\in C_c^\infty(\R)$, integration by parts on
+$(-\infty,0)$ and $(0,\infty)$ gives
+\[
+\langle D|u|,\psi\rangle
+=-\int_{\R}|u|\psi'(u)\,du
+=\int_{\R}\operatorname{sgn}(u)\psi(u)\,du.
+\]
+Thus $D|u|=\operatorname{sgn}(u)$ in the distributional sense. Similarly,
+\[
+\langle D\operatorname{sgn},\psi\rangle
+=-\int_{\R}\operatorname{sgn}(u)\psi'(u)\,du
+=2\psi(0),
+\]
+so $D^2|u|=2\delta_0$. Applying the distributional Leibniz rule to
+$w=\phi|u|$, we obtain
+\[
+w'=\phi'|u|+\phi\operatorname{sgn}(u),\qquad
+w''=2\phi''|u|+2\phi'\operatorname{sgn}(u)+2\phi(0)\delta_0
+=2\delta_0+r,
+\]
+where $r\in C_c^\infty(\R)$, since $\phi\equiv1$ near the origin.
+
+As $\widehat{\delta_0}=1$, the Fourier characterization of Sobolev spaces
+yields
+\[
+\|\delta_0\|_{H^\sigma}^2
+=\int_{\R}(1+\omega^2)^\sigma\,d\omega<\infty
+\quad\Longleftrightarrow\quad \sigma<-\frac12.
+\]
+Since $r\in H^\sigma(\R)$ for every $\sigma\in\R$, it follows that
+$w''\in H^\sigma(\R)$ if and only if $\sigma<-1/2$.
+Moreover, $w\in L^2(\R)$, and the Fourier identity
+$\widehat{w''}(\omega)=-\omega^2\widehat w(\omega)$ implies
+\[
+w\in H^s(\R)\quad\Longleftrightarrow\quad
+w''\in H^{s-2}(\R).
+\]
+Consequently, $w\in H^s(\R)$ if and only if $s<3/2$.
+
+For the sharp Besov regularity, consider the centered second difference
+$\Delta_h^2w(u)=w(u+h)-2w(u)+w(u-h)$. Since $\phi\equiv1$ near
+the origin, for sufficiently small $h$ and $|u|\le |h|$,
+\[
+\Delta_h^2w(u)=\Delta_h^2|u|
+=2(|h|-|u|).
+\]
+Hence
+\[
+\|\Delta_h^2w\|_2^2
+\ge 4\int_{-|h|}^{|h|}(|h|-|u|)^2\,du
+=\frac83|h|^3.
+\]
+Conversely, the same local calculation, together with the smoothness
+and compact support of $w$ away from the origin, gives
+$\|\Delta_h^2w\|_2^2\le C|h|^3$ for sufficiently small $h$.
+Thus
+\[
+\|\Delta_h^2w\|_2\asymp |h|^{3/2}.
+\]
+By the second-difference characterization of Besov spaces,
+$w\in B^{3/2}_{2,\infty}(\R)$. On the other hand,
+$B^{3/2}_{2,2}(\R)=H^{3/2}(\R)$, so the Sobolev result above
+implies $w\notin B^{3/2}_{2,2}(\R)$.
+\end{proof}
+
+
+\begin{theorem}[Transverse kink imposes the $3/2$ threshold]
+\label{app:thm-normalform-initial}
+Let $\prm:\R^m\to\R$ be continuous of the form $\prm=\prm_+$ on $\{\Phi\ge0\}$ and
+$\prm=\prm_-$ on $\{\Phi\le0\}$, with $\prm_\pm\in C^2$ near
+$\Sigma=\{\Phi=0\}$ and distinct normal derivatives $\partial_n\prm_+\neq\partial_n\prm_-$
+on $\Sigma$. Let $F\in C^2$ be transverse to $\Sigma$ at $x_0$. Then
+$S=F^{-1}(\Sigma)$ is locally a $C^2$ hypersurface, and in suitable local $C^2$
+coordinates $(u,z)\in\R\times\R^{d-1}$ straightening $S=\{u=0\}$,
+\[
+g(u,z)=h(u,z)+a(z)\abs{u},\qquad h\in C^2,\ a(z_0)\neq0 .
+\]
+Consequently $g\in H^s_{loc}$ for all $s<3/2$ and $g\notin H^{3/2}_{loc}$.
+\end{theorem}
+
+\begin{proof}
+\emph{Straightening.} Since $\nabla\Phi\neq0$ on $\Sigma$ and $F$ is transverse,
+$\psi:=\Phi\circ F\in C^2$ satisfies $\psi(x_0)=0$ and
+$\nabla\psi(x_0)=DF(x_0)^\top\nabla\Phi(F(x_0))\neq0$. By the implicit function
+theorem $S=\{\psi=0\}$ is a $C^2$ hypersurface, and $u:=\psi$ completed by $C^2$
+coordinates $z$ along $S$ gives a local $C^2$ diffeomorphism whose sign
+distinguishes the two branches. \emph{Normal form.} On each branch
+$\prm_\pm\circ F\in C^2$; expanding to first order transversally,
+$g=\prm_\pm\circ F=c(z)+b_\pm(z)u+O(u^2)$ ($\pm u>0$), with $c$ continuous
+(because $\prm_+=\prm_-$ on $\Sigma$) and $b_+(z_0)\neq b_-(z_0)$ (distinct normal
+derivatives). Setting $a(z)=\tfrac12(b_+(z)-b_-(z))$ and absorbing the regular
+part (average of the two branches) into $h\in C^2$ yields
+$g=h+a(z)\abs{u}$ with $a(z_0)\neq0$. \emph{Regularity.} Invariance of $H^s$ for
+$s\le2$ under $C^2$ diffeomorphisms reduces the regularity of $g$ to the normal
+form. The term $a(z)\abs{u}$ is treated by Lemma~\ref{app:lem-besov} in $u$; the
+$C^2$ dependence in $z$ (with $a(z_0)\neq0$) and integration over the $d-1$
+tangential variables preserve the critical exponent $3/2$ by Fubini for weighted
+Sobolev norms, the singularity being purely normal. Hence $g\in H^s_{loc}$ for
+$s<3/2$ and $g\notin H^{3/2}_{loc}$.
+\end{proof}
+
+\begin{theorem}[Transverse kink imposes the $3/2$ threshold]
+\label{app:thm-normalform}
+Let $\Phi\in C^2(\R^m)$ with $\nabla\Phi\neq0$ near
+$y_0\in\Sigma:=\{\Phi=0\}$. Let $\prm:\R^m\to\R$ be continuous,
+with $\prm=\prm_+$ on $\{\Phi\ge0\}$ and $\prm=\prm_-$ on
+$\{\Phi\le0\}$, where $\prm_\pm\in C^2$ near $y_0$ and
+$\partial_n\prm_+(y_0)\neq\partial_n\prm_-(y_0)$.
+Let $F:\R^d\to\R^m$ be $C^2$, with $F(x_0)=y_0$, and
+transverse to $\Sigma$ at $x_0$. Then $S=F^{-1}(\Sigma)$
+is locally a $C^2$ hypersurface. In suitable local $C^2$
+coordinates $(u,z)\in\R\times\R^{d-1}$ straightening
+$S=\{u=0\}$, the function $g=\prm\circ F$ satisfies
+\[
+g(u,z)=c(z)+b(z)u+a(z)\abs{u}+O(u^2),
+\qquad a(z_0)\neq0.
+\]
+Moreover, $g\in H^s_{\mathrm{loc}}$ for every $s<3/2$,
+but $g\notin H^{3/2}(V)$ for any sufficiently small
+neighborhood $V$ of $x_0$.
+\end{theorem}
+
+\begin{proof}
+\emph{Straightening.} Set $\psi:=\Phi\circ F$. By transversality,
+\[
+\nabla\psi(x_0)
+=DF(x_0)^\top\nabla\Phi(y_0)\neq0.
+\]
+The implicit function theorem implies that $S=\{\psi=0\}$
+is locally a $C^2$ hypersurface. Taking $u:=\psi$ and
+completing it with tangential coordinates $z$ yields a
+local $C^2$ diffeomorphism that straightens $S=\{u=0\}$
+and distinguishes the two branches by the sign of $u$.
+
+\emph{Normal form.} Write $g_\pm=\prm_\pm\circ F$ in these
+coordinates. Since $g_\pm\in C^2$ and the two branches
+coincide on $S$, Taylor expansion in the transverse
+direction gives
+\[
+g_\pm(u,z)=c(z)+b_\pm(z)u+O(u^2),
+\qquad b_\pm(z)=\partial_u g_\pm(0,z).
+\]
+Setting $b=(b_++b_-)/2$ and $a=(b_+-b_-)/2$ yields
+\[
+g(u,z)=c(z)+b(z)u+a(z)\abs{u}+O(u^2).
+\]
+To verify that $a(z_0)\neq0$, let $q=\prm_+-\prm_-$.
+Since $q=0$ on $\Sigma$, its gradient at $y_0$ is
+normal to $\Sigma$. The distinct normal derivatives
+therefore imply
+$\nabla q(y_0)=\lambda\nabla\Phi(y_0)$ for some
+$\lambda\neq0$. As $u=\Phi\circ F$, the chain rule gives
+\[
+b_+(z_0)-b_-(z_0)
+=\partial_u(q\circ F)(0,z_0)=\lambda\neq0.
+\]
+
+\emph{Sobolev regularity.} The continuity of $g$ across
+$\{u=0\}$ implies that its first distributional derivative
+has no singular contribution. Its transverse derivative
+has a jump $J(z):=b_+(z)-b_-(z)=2a(z)$, so
+\[
+D_u^2g=r(u,z)+J(z)\delta_0(u),
+\]
+where $r=\partial_u^2g_\pm$ on the respective half-spaces
+and $r\in L^2_{\mathrm{loc}}$. Since the tangential
+derivatives of the two branches agree on $\{u=0\}$,
+their second tangential derivatives produce no Dirac
+contribution. Consequently,
+\[
+\Delta g=R(u,z)+J(z)\delta_0(u),
+\qquad R\in L^2_{\mathrm{loc}}.
+\]
+
+Let $\chi\in C_c^\infty$ be a cutoff supported in the
+coordinate neighborhood and equal to one near $(0,z_0)$.
+Writing $v=\chi g$, the distributional product rule gives
+\[
+\Delta v=R_\chi(u,z)+A(z)\delta_0(u),
+\qquad R_\chi\in L^2,\quad
+A(z)=\chi(0,z)J(z).
+\]
+Here $A$ is compactly supported, belongs to $L^2$, and
+is not identically zero since $J(z_0)\neq0$.
+Taking the Fourier transform in $(u,z)$, with dual
+variables $(\xi,\zeta)$, yields
+\[
+\widehat{A(z)\delta_0(u)}(\xi,\zeta)
+=\widehat A(\zeta).
+\]
+Hence, for any $\sigma\in\R$,
+\[
+\|A\delta_0\|_{H^\sigma}^2
+=\int_{\R^{d-1}}|\widehat A(\zeta)|^2
+\int_{\R}(1+\xi^2+|\zeta|^2)^\sigma
+\,d\xi\,d\zeta.
+\]
+The inner integral is finite precisely when
+$\sigma<-1/2$; in this range it is uniformly bounded
+in $\zeta$. Since $A\in L^2$ is nonzero,
+\[
+A(z)\delta_0(u)\in H^\sigma
+\quad\Longleftrightarrow\quad
+\sigma<-\frac12.
+\]
+As $R_\chi\in L^2$, the same threshold holds for
+$\Delta v$ when $\sigma<0$. Finally, since $v\in L^2$,
+the Fourier characterization gives
+\[
+\|v\|_{H^s}^2\asymp
+\|v\|_{L^2}^2+\|\Delta v\|_{H^{s-2}}^2.
+\]
+It follows that $v\in H^s$ for every $s<3/2$,
+whereas $v\notin H^{3/2}$. The argument applies to
+arbitrary local cutoffs, and the $C^2$ coordinate
+change preserves the relevant Sobolev regularity.
+Thus $g\in H^s_{\mathrm{loc}}$ for all $s<3/2$,
+while $g\notin H^{3/2}(V)$ in every sufficiently
+small neighborhood of $x_0$.
+\end{proof}
+
+
+\begin{corollary}[Target matching]
+\label{app:cor-tm}
+For $f\in C^2$, $f(x_0)=T$, $\nabla f(x_0)\neq0$, $g=\abs{f-T}$ satisfies
+$g\in H^s_{loc}$ for $s<3/2$ and $g\notin H^{3/2}_{loc}$.
+\end{corollary}
+\begin{proof}
+Take $m=1$, $\Phi(u)=u-T$, $\prm_\pm(u)=\pm(u-T)$: the normal derivatives are
+$+1$ and $-1$, distinct, and $F=f$ is transverse where $\nabla f\neq0$. Apply
+Theorem~\ref{app:thm-normalform} with $a\equiv1$.
+\end{proof}
+
+\begin{theorem}[Order-$q$ matching defect]
+\label{app:thm-orderq}
+Under the hypotheses of Theorem~\ref{app:thm-normalform} but with
+$\prm_\pm\in C^{q+1}$ and normal derivatives coinciding up to order $q-1$ and
+differing at order $q$ (and $F\in C^{q+1}$), the normal form becomes
+$g(u,z)=h(u,z)+a(z)u_+^q$, $u_+=\max(u,0)$, $h\in C^{q+1}$, $a(z_0)\neq0$, and
+$g\in H^s_{loc}$ for $s<q+\tfrac12$, $g\notin H^{q+1/2}_{loc}$.
+\end{theorem}
+\begin{proof}
+Identical to Theorem~\ref{app:thm-normalform}, except that matching to order $q-1$
+cancels the lower Taylor terms, leaving a jump at order $q$, i.e.\ a term
+$a(z)u_+^q$. The profile $u_+^q$ has weak derivative of order $q$ equal to
+$q!\,\mathbf{1}_{u>0}$, whose Fourier transform places it in
+$H^{-1/2-\eta}\setminus H^{-1/2}$; integrating $q+1$ times gives the threshold
+$q+1/2$.
+\end{proof}
+
+\begin{corollary}[RKHS non-membership]
+\label{app:cor-nonmember}
+Let $k$ be $\tau_k$-regular, $\Hk\simeq H^{\tau_k}$. Under the order-$q$ defect,
+if $\tau_k\ge q+\tfrac12$ then $g\notin\Hk$; for a kink ($q=1$),
+$\tau_k\ge3/2\Rightarrow g\notin\Hk$; for a Mat\'ern-$\nu$ kernel,
+$\nu+\tfrac d2\ge q+\tfrac12\Rightarrow g\notin\Hk$.
+\end{corollary}
+\begin{proof}
+If $g\in\Hk\simeq H^{\tau_k}_{loc}$ then $g\in H^{q+1/2}_{loc}$ once
+$\tau_k\ge q+1/2$, contradicting Theorem~\ref{app:thm-orderq} (the large
+inequality suffices, the critical case $\tau_k=q+1/2$ being itself excluded).
+\end{proof}
+
+\begin{remark}[Critical case and dimension]
+$d$ is the domain dimension, not the number of objectives. In $d=1$ for a kink,
+Mat\'ern-$1/2$ has $\tau_k=1<3/2$: a Lipschitz kink then \emph{belongs} to the
+RKHS and the geometric misspecification disappears. The threshold is an
+inequality; $\nu=1$ ($\tau_k=3/2$) sits exactly at the critical value and remains
+misspecified. This does not make the task-in-model method correct in the presence
+of noise: the distributional layer persists for every kernel.
+\end{remark}
+
+\subsection{Quantitative approximation barrier}
+
+\begin{theorem}[Approximation barrier, restated]
+\label{app:thm-barrier-initial}
+Let $g=\abs{f-T}$ with $f\in C^2$, $f(x_0)=T$, $\nabla f(x_0)\neq0$, and $k$ a
+$\tau_k$-regular kernel with $\nu:=\tau_k-\tfrac d2>1$, so that
+$\Hk\hookrightarrow C^\nu$ with $\norm{h}_{C^\nu}\le C_S\Hnorm{h}$. Then there
+exist $c>0$ and $B_0$ such that for all $B\ge B_0$,
+$\epsinf(B)=\inf_{\Hnorm{h}\le B}\norm{h-g}_\infty\ge cB^{-1/(\nu-1)}$. In $d=1$,
+mollification gives $\epsinf(B)\asymp B^{-1/(\nu-1)}$.
+\end{theorem}
+
+\begin{proof}
+\emph{Lower bound.} Fix an even integer $r>\nu$ and a transverse direction $v$
+(with $\partial_v(f-T)(x_0)\neq0$); let $\Delta_t^r$ be the order-$r$ centred
+finite difference of step $t$ along $v$ at $x_0$. In normal-form coordinates
+$g=h+a\abs{u}$ with $h\in C^2$, and, up to reduction, $a(z_0)\neq0$. A direct
+computation of the even-order finite difference of $\abs{u}$ at $0$ gives
+$\big|\Delta_t^r\abs{u}\big|_{u=0}=\kappa_r\,t$ with $\kappa_r>0$ (the even order
+$r$ avoids the cancellation an odd centred difference would produce). Since
+$h\in C^2$ and $r>2$, $|\Delta_t^r h|\lesssim t^2 t^{r-2}=t^r=o(t)$; hence for
+small $t$,
+\[
+\big|\Delta_t^r g\big|_{x_0}\ge\tfrac12\abs{a(z_0)}\kappa_r\,t=:c_1 t .
+\]
+On the other hand, for $h\in\Hk$ with $\Hnorm{h}\le B$, the embedding
+$\Hk\hookrightarrow C^\nu$ gives
+$|\Delta_t^r h|\le C_r\norm{h}_{C^\nu}\le C_r C_S B\,t^\nu$ (a difference of order
+$r>\nu$ of a $C^\nu$ function is $O(t^\nu)$). The operator $\Delta_t^r$ has
+$\ell^1$-norm $2^r$, so
+\[
+2^r\norm{g-h}_\infty\ge\big|\Delta_t^r(g-h)\big|_{x_0}
+\ge\big|\Delta_t^r g\big|_{x_0}-\big|\Delta_t^r h\big|_{x_0}
+\ge c_1 t-C_r C_S B\,t^\nu .
+\]
+Optimizing the right-hand side over $t$ (maximum at $t^\star\asymp B^{-1/(\nu-1)}$)
+gives value $\asymp B^{-1/(\nu-1)}$, whence $\norm{g-h}_\infty\gtrsim
+B^{-1/(\nu-1)}$; taking the infimum over $h$ gives the bound locally near $x_0$,
+which suffices since $\norm{g-h}_{\infty,\X}\ge\norm{g-h}_{\infty,U}$ for a
+neighbourhood $U$ of $x_0$.
+
+\emph{Upper bound ($d=1$).} Mollify $g_\delta=\varphi_\delta*g$ with a smooth
+mollifier of scale $\delta$. Since $g$ is Lipschitz, $\norm{g-g_\delta}_\infty\le
+C\delta$, while a standard estimate gives
+$\norm{g_\delta}_{\Hk}\lesssim\delta^{-(\tau_k-1)}=\delta^{-(\nu-1/2)}$ in $d=1$.
+Taking $B\asymp\delta^{-(\nu-1)}$ (after the fine optimization of
+\S\ref{app:tm}, analogous to the RBF computation) yields
+$\epsinf(B)\lesssim B^{-1/(\nu-1)}$, matching the lower bound.
+\end{proof}
+
+
+\begin{theorem}[Approximation barrier]
+\label{app:thm-barrier}
+Let $\mathcal X\subset\mathbb R^d$ contain a neighbourhood of $x_0$,
+and let $g=|f-T|$, where $f\in C^2(\mathcal X)$,
+$f(x_0)=T$, and $\nabla f(x_0)\neq0$.
+Suppose that $\mathcal H_k$ embeds continuously into
+$B^\nu_{\infty,\infty}(\mathcal X)$, with
+$\nu:=\tau_k-d/2>1$. Then there exist $c>0$ and $B_0>0$
+such that, for all $B\ge B_0$,
+\[
+\varepsilon_\infty(B)
+:=\inf_{\|h\|_{\mathcal H_k}\le B}\|h-g\|_\infty
+\ge cB^{-1/(\nu-1)}.
+\]
+In dimension $d=1$, if $\mathcal X$ is a compact interval,
+$f$ is $C^2$ on a neighbourhood of $\mathcal X$ with finitely
+many simple crossings of the level $T$, and
+$\mathcal H_k$ is norm-equivalent to the restriction of
+$H^{\tau_k}(\mathbb R)$, then the bound is sharp:
+\[
+\varepsilon_\infty(B)\asymp B^{-1/(\nu-1)}.
+\]
+\end{theorem}
+
+\begin{proof}
+\emph{Lower bound.}
+Choose a unit vector $v$ such that
+$a:=|\partial_v f(x_0)|>0$. Taylor's theorem and the
+reverse triangle inequality give
+\[
+g(x_0+sv)=a|s|+O(s^2).
+\]
+Fix an even integer $r>\nu$ and let $\Delta_t^r$ denote
+the centred finite difference of order $r$ and step $t$
+along $v$. Since
+$\Delta_t^r|s||_{s=0}=\gamma_r t$ with
+$|\gamma_r|=\kappa_r>0$, we obtain
+\[
+\Delta_t^r g(x_0)=a\gamma_r t+O(t^2).
+\]
+Thus, for sufficiently small $t>0$,
+$|\Delta_t^r g(x_0)|\ge c_1t$.
+
+By the continuous Besov embedding, every
+$h\in\mathcal H_k$ with $\|h\|_{\mathcal H_k}\le B$
+satisfies
+\[
+|\Delta_t^r h(x_0)|\le C_rBt^\nu.
+\]
+Since the sum of the absolute values of the finite-difference
+coefficients is $2^r$, it follows that
+\[
+2^r\|g-h\|_\infty
+\ge |\Delta_t^r(g-h)(x_0)|
+\ge c_1t-C_rBt^\nu.
+\]
+Choosing
+$t=(c_1/(\nu C_rB))^{1/(\nu-1)}$,
+which is admissible for sufficiently large $B$, yields
+\[
+\|g-h\|_\infty\ge cB^{-1/(\nu-1)}.
+\]
+Taking the infimum over the RKHS ball proves the lower bound.
+
+\emph{Upper bound ($d=1$).}
+Write $\tau=\tau_k=\nu+1/2>3/2$.
+Under the additional assumptions, $g$ admits a compactly
+supported extension $G$ to $\mathbb R$ whose second
+distributional derivative is a finite signed measure.
+Consequently,
+\[
+|\widehat G(\xi)|\le C|\xi|^{-2},
+\qquad |\xi|\ge1.
+\]
+Let $G_\delta=\varphi_\delta*G$, where $\varphi$ is a
+smooth mollifier. Since $G$ is Lipschitz,
+\[
+\|G-G_\delta\|_\infty\le C\delta.
+\]
+Moreover, using
+$\widehat{G_\delta}(\xi)
+=\widehat\varphi(\delta\xi)\widehat G(\xi)$,
+we obtain
+\[
+\begin{aligned}
+\|G_\delta\|_{H^\tau}^2
+&\le C+
+C\int_{|\xi|\ge1}
+|\xi|^{2\tau-4}
+|\widehat\varphi(\delta\xi)|^2\,d\xi\\
+&\le C\delta^{-(2\tau-3)}.
+\end{aligned}
+\]
+The last inequality follows by the change of variable
+$u=\delta\xi$, since $\tau>3/2$ and
+$\widehat\varphi$ decays rapidly.
+By norm equivalence, the restriction
+$h_\delta=G_\delta|_{\mathcal X}$ satisfies
+\[
+\|h_\delta\|_{\mathcal H_k}
+\le C\delta^{-(\tau-3/2)}
+=C\delta^{-(\nu-1)}.
+\]
+Taking $\delta=(C/B)^{1/(\nu-1)}$ gives
+$\|h_\delta\|_{\mathcal H_k}\le B$ and
+\[
+\varepsilon_\infty(B)
+\le\|g-h_\delta\|_\infty
+\le C'B^{-1/(\nu-1)}.
+\]
+Together with the lower bound, this proves the claim.
+\end{proof}
+
+
+\begin{remark}[Locality and the RBF exclusion]
+The lower bound is local, living exactly where the optimizer must be precise. The
+RBF kernel is excluded from the polynomial statement because its RKHS is not a
+finite-order Sobolev space; qualitatively an analytic kernel is even more strongly
+penalized by a cusp, and the decay of $\epsinf(B)$ is then slower than any power.
+A precise RBF lower bound is not claimed here.
+\end{remark}
+
+\subsection{Target-matching regret guarantee}
+
+\begin{theorem}[Separation of concerns for target matching, restated]
+\label{app:thm-tmsoc}
+Under the confidence event of Theorem~\ref{app:thm-conf} with $f\in\Hk$,
+$\Hnorm{f}\le B$, the rule $x_t\in\argmin_x a_t^{\mathrm{TM}}(x)$,
+$a_t^{\mathrm{TM}}(x)=\abs{\mu_{t-1}(x)-T}-\sqrt{\beta_t}\sigma_{t-1}(x)$, gives,
+with probability $\ge1-\delta$,
+$R_T^{\mathrm{TM}}=\sum_{t=1}^T(\abs{f(x_t)-T}-\abs{f(x^\star)-T})
+=O(\sqrt{T\beta_T\gain_T})$.
+\end{theorem}
+
+\begin{proof}
+Write $g(x)=\abs{f(x)-T}$ and $r_t=g(x_t)-g(x^\star)$. By the triangle inequality
+and the confidence bound at $x$,
+\[
+g(x)=\abs{f(x)-T}\le\abs{f(x)-\mu_{t-1}(x)}+\abs{\mu_{t-1}(x)-T}
+\le\sqrt{\beta_t}\sigma_{t-1}(x)+\abs{\mu_{t-1}(x)-T}.
+\tag{B.1}
+\]
+Symmetrically, $\abs{\mu_{t-1}(x)-T}\le\sqrt{\beta_t}\sigma_{t-1}(x)+g(x)$.
+Applying (B.1) at $x_t$ and the definition of $x_t$
+($a_t^{\mathrm{TM}}(x_t)\le a_t^{\mathrm{TM}}(x^\star)$, i.e.\
+$\abs{\mu_{t-1}(x_t)-T}-\sqrt{\beta_t}\sigma_{t-1}(x_t)\le
+\abs{\mu_{t-1}(x^\star)-T}-\sqrt{\beta_t}\sigma_{t-1}(x^\star)$), together with the
+symmetric inequality at $x^\star$, gives, after rearrangement,
+\[
+g(x_t)\le\abs{f(x^\star)-T}+2\sqrt{\beta_t}\sigma_{t-1}(x_t)
+=g(x^\star)+2\sqrt{\beta_t}\sigma_{t-1}(x_t),
+\]
+hence $r_t\le2\sqrt{\beta_t}\sigma_{t-1}(x_t)$, the same per-step bound as
+classical GP-UCB. Squaring, summing, Cauchy--Schwarz and
+Lemma~\ref{app:lem-sumvar} give $R_T^{\mathrm{TM}}=O(\sqrt{T\beta_T\gain_T})$.
+\end{proof}
+
+\noindent This is the $m=1$, $\prm(z)=-\abs{z-T}$ special case of the pushforward
+theorem of Appendix~\ref{app:mo}.

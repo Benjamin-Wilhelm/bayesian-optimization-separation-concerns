@@ -1,0 +1,158 @@
+% ======================================================================
+%  references.bib  —  toutes les entrées vérifiées sur sources primaires
+%  (PMLR, JMLR, NeurIPS, ScienceDirect / PolyPublie, arXiv).
+% ======================================================================
+
+% ---- Classical GPBO foundations ----------------------------------------
+@inproceedings{srinivas2010,
+  author    = {Srinivas, Niranjan and Krause, Andreas and Kakade, Sham M. and Seeger, Matthias W.},
+  title     = {{Gaussian Process Optimization in the Bandit Setting: No Regret and Experimental Design}},
+  booktitle = {Proceedings of the 27th International Conference on Machine Learning (ICML)},
+  year      = {2010},
+  pages     = {1015--1022}
+}
+
+@article{kanagawa2018,
+  author  = {Kanagawa, Motonobu and Hennig, Philipp and Sejdinovic, Dino and Sriperumbudur, Bharath K.},
+  title   = {{Gaussian Processes and Kernel Methods: A Review on Connections and Equivalences}},
+  journal = {arXiv preprint arXiv:1807.02582},
+  year    = {2018}
+}
+
+% ---- Composite Bayesian optimization -----------------------------------
+@inproceedings{astudillo2019,
+  author    = {Astudillo, Raul and Frazier, Peter I.},
+  title     = {{Bayesian Optimization of Composite Functions}},
+  booktitle = {Proceedings of the 36th International Conference on Machine Learning (ICML)},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {97},
+  pages     = {354--363},
+  year      = {2019}
+}
+
+% ---- Misspecified GP bandits -------------------------------------------
+@inproceedings{bogunovic2021,
+  author    = {Bogunovic, Ilija and Krause, Andreas},
+  title     = {{Misspecified Gaussian Process Bandit Optimization}},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume    = {34},
+  year      = {2021}
+}
+
+% ---- Convergence under smoothness misspecification ---------------------
+@article{wynne2021,
+  author  = {Wynne, George and Briol, Fran\c{c}ois-Xavier and Girolami, Mark},
+  title   = {{Convergence Guarantees for Gaussian Process Means With Misspecified Likelihoods and Smoothness}},
+  journal = {Journal of Machine Learning Research},
+  volume  = {22},
+  number  = {123},
+  pages   = {1--40},
+  year    = {2021}
+}
+
+% ---- Online hyperparameter estimation ----------------------------------
+@article{berkenkamp2019,
+  author  = {Berkenkamp, Felix and Schoellig, Angela P. and Krause, Andreas},
+  title   = {{No-Regret Bayesian Optimization with Unknown Hyperparameters}},
+  journal = {Journal of Machine Learning Research},
+  volume  = {20},
+  number  = {50},
+  pages   = {1--24},
+  year    = {2019}
+}
+
+@article{bull2011,
+  author  = {Bull, Adam D.},
+  title   = {{Convergence Rates of Efficient Global Optimization Algorithms}},
+  journal = {Journal of Machine Learning Research},
+  volume  = {12},
+  pages   = {2879--2904},
+  year    = {2011}
+}
+
+% ---- Prior-guided BO ---------------------------------------------------
+@article{guayhottin2025,
+  author  = {Guay Hottin, Rose and Kardassevitch, Lison and Ph\d{a}m, Ho{\`a}ng Hi\d{\^e}p and Lajoie, Guillaume and Bonizzato, Marco},
+  title   = {{Robust prior-biased acquisition function for human-in-the-loop Bayesian optimization}},
+  journal = {Knowledge-Based Systems},
+  volume  = {311},
+  pages   = {113039},
+  year    = {2025},
+  doi     = {10.1016/j.knosys.2025.113039}
+}
+
+@inproceedings{hvarfner2022,
+  author    = {Hvarfner, Carl and Stoll, Danny and Souza, Artur and Lindauer, Marius and Hutter, Frank and Nardi, Luigi},
+  title     = {{$\pi$BO: Augmenting Acquisition Functions with User Beliefs for Bayesian Optimization}},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2022}
+}
+
+@inproceedings{cheng2024,
+  author    = {Cheng, Shuyu and Miao, Yibo and Dong, Yinpeng and Yang, Xiao and Gao, Xiao-Shan and Zhu, Jun},
+  title     = {{Efficient Black-box Adversarial Attacks via Bayesian Optimization Guided by a Function Prior}},
+  booktitle = {Proceedings of the 41st International Conference on Machine Learning (ICML)},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {235},
+  pages     = {8163--8183},
+  year      = {2024}
+}
+
+% ---- Multi-objective BO ------------------------------------------------
+@inproceedings{paria2019,
+  author    = {Paria, Biswajit and Kandasamy, Kirthevasan and P{\'o}czos, Barnab{\'a}s},
+  title     = {{A Flexible Framework for Multi-Objective Bayesian Optimization using Random Scalarizations}},
+  booktitle = {Proceedings of the 35th Conference on Uncertainty in Artificial Intelligence (UAI)},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {115},
+  pages     = {766--776},
+  year      = {2020}
+}
+
+@inproceedings{golovin2020,
+  author    = {Golovin, Daniel and Zhang, Qiuyi},
+  title     = {{Random Hypervolume Scalarizations for Provable Multi-Objective Black Box Optimization}},
+  booktitle = {Proceedings of the 37th International Conference on Machine Learning (ICML)},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {119},
+  pages     = {11096--11105},
+  year      = {2020}
+}
+
+@inproceedings{daulton2020,
+  author    = {Daulton, Samuel and Balandat, Maximilian and Bakshy, Eytan},
+  title     = {{Differentiable Expected Hypervolume Improvement for Parallel Multi-Objective Bayesian Optimization}},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume    = {33},
+  pages     = {9851--9864},
+  year      = {2020}
+}
+
+@article{zitzler1999,
+  author  = {Zitzler, Eckart and Thiele, Lothar},
+  title   = {{Multiobjective Evolutionary Algorithms: A Comparative Case Study and the Strength Pareto Approach}},
+  journal = {IEEE Transactions on Evolutionary Computation},
+  volume  = {3},
+  number  = {4},
+  pages   = {257--271},
+  year    = {1999}
+}
+
+@article{zitzler2000,
+  author  = {Zitzler, Eckart and Deb, Kalyanmoy and Thiele, Lothar},
+  title   = {{Comparison of Multiobjective Evolutionary Algorithms: Empirical Results}},
+  journal = {Evolutionary Computation},
+  volume  = {8},
+  number  = {2},
+  pages   = {173--195},
+  year    = {2000}
+}
+
+% ---- Software (used in the experimental appendix) ----------------------
+@inproceedings{balandat2020botorch,
+  author    = {Balandat, Maximilian and Karrer, Brian and Jiang, Daniel R. and Daulton, Samuel and Letham, Benjamin and Wilson, Andrew Gordon and Bakshy, Eytan},
+  title     = {{BoTorch: A Framework for Efficient Monte-Carlo Bayesian Optimization}},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume    = {33},
+  year      = {2020}
+}

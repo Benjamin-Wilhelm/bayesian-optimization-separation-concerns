@@ -1,0 +1,194 @@
+% ======================================================================
+%  Appendix C --- Prior-guided Bayesian optimization
+% ======================================================================
+\section{Prior-guided Bayesian optimization}
+\label{app:prior}
+
+This appendix supports Section~\ref{sec:contrib-prior}: the safe UCB adaptation,
+the residual-GP posterior and the fixed-prior regret bound, the oracle
+coefficient, the marginal-likelihood estimator and why it is only locally
+informed, and the self-confirming failure construction.
+
+\subsection{Safe UCB adaptation of the spatial prior}
+
+\begin{proof}[Proof of Proposition~\ref{prop:prior-safe}]
+Let $w_\alpha(x)=(1-\alpha)+\alpha\pi(x)\in[1-\alpha,1]$, so
+$1\le w_\alpha(x)/(1-\alpha)\le1/(1-\alpha)$. On the confidence event,
+$f(x)\le\mu_{t-1}(x)+\sqrt{\beta_t}\sigma_{t-1}(x)$; since
+$w_\alpha/(1-\alpha)\ge1$ and $\sqrt{\beta_t}\sigma_{t-1}\ge0$,
+$f(x)\le a_t^{\RIGHT}(x)$ for all $x$, hence
+$f(x^\star)\le a_t^{\RIGHT}(x^\star)\le a_t^{\RIGHT}(x_t)$. With the lower bound
+$f(x_t)\ge\mu_{t-1}(x_t)-\sqrt{\beta_t}\sigma_{t-1}(x_t)$,
+\[
+r_t=f(x^\star)-f(x_t)\le\Bigl[\tfrac{w_\alpha(x_t)}{1-\alpha}+1\Bigr]
+\sqrt{\beta_t}\sigma_{t-1}(x_t)\le\tfrac{2-\alpha}{1-\alpha}\sqrt{\beta_t}\sigma_{t-1}(x_t).
+\]
+Summing, Cauchy--Schwarz and Lemma~\ref{app:lem-sumvar} give
+$R_T=\widetilde O\bigl(\tfrac{1}{1-\alpha}\sqrt{T\beta_T\gain_T}\bigr)$.
+\end{proof}
+
+\begin{remark}
+Multiplying the \emph{entire} UCB by $w_\alpha$ (the empirically natural rule)
+also attenuates the posterior mean in low-prior regions and does not preserve the
+optimism argument as cleanly; the bonus-only modulation above is preferred when a
+transparent guarantee is required. This adaptation is ours; the $\alpha$-$\pi$BO
+weight and its EI analysis are due to Guay Hottin et al.~\cite{guayhottin2025}.
+\end{remark}
+
+\subsection{Residual GP and the fixed functional prior}
+
+Write $f=\lambda f'+r_\lambda$ with $r_\lambda\sim\GP(0,k)$. With ridge $\eta$,
+the residual posterior mean and variance are
+\[
+\mu_t^{r,\lambda}(x)=\mathbf k_t(x)^\top(K_t+\eta I)^{-1}(\mathbf y_t-\lambda\mathbf y_t'),
+\qquad
+\sigma_t^2(x)=k(x,x)-\mathbf k_t(x)^\top(K_t+\eta I)^{-1}\mathbf k_t(x),
+\]
+so the objective posterior mean is $\mu_t^\lambda(x)=\lambda f'(x)+\mu_t^{r,\lambda}(x)$
+and, for fixed hyperparameters and $\eta$, the posterior variance does not depend
+on $\lambda$.
+
+\begin{theorem}[Fixed functional prior, restated; {cf.\ \cite{cheng2024}}]
+\label{app:thm-priorfixed}
+If $\lambda$ is fixed and known and $f,f'\in\Hk$, then with
+$B_\lambda=\norm{f-\lambda f'}_{\Hk}$,
+$R_T=\widetilde O(B_\lambda\sqrt{T\gain_T}+R\gain_T\sqrt{T})$.
+\end{theorem}
+\begin{proof}
+Subtracting the known prior contribution, $y_t-\lambda f'(x_t)=r_\lambda(x_t)+\eps_t$,
+reduces the problem to a standard noisy kernelized bandit on the residual
+$r_\lambda$, whose RKHS radius is $B_\lambda$. Applying
+Theorem~\ref{app:thm-conf}/\ref{app:thm-gpucb} to $r_\lambda$ (the UCB
+$a_{t+1}^\lambda=\mu_t^\lambda+\beta_{t+1}(\lambda)\sigma_t$ optimizes $f$ because
+$\lambda f'$ is a known additive shift) gives the stated bound with
+$\beta_t(\lambda)=B_\lambda+\widetilde O(R\sqrt{\gain_{t-1}+\log(1/\delta)})$.
+\end{proof}
+
+\begin{proof}[Oracle coefficient]
+Only $B_\lambda=\norm{f-\lambda f'}_{\Hk}$ depends on $\lambda$; the noise term
+does not. Minimizing $\norm{f-\lambda f'}_{\Hk}^2=\Hnorm{f}^2-2\lambda\inner{f}{f'}_{\Hk}
++\lambda^2\norm{f'}_{\Hk}^2$ over $\lambda$ gives, for $f'\neq0$, the unique
+minimizer $\lambda^\star_{\rkhs}=\inner{f}{f'}_{\Hk}/\norm{f'}_{\Hk}^2$, the RKHS
+projection of $f$ onto $\operatorname{span}\{f'\}$. Since $\lambda=0$ is
+admissible, $\norm{f-\lambda^\star_{\rkhs}f'}_{\Hk}\le\Hnorm{f}$: the oracle
+functional prior never worsens the RKHS-dependent term. It is not computable, as
+$f$ is unknown.
+\end{proof}
+
+\subsection{Marginal-likelihood estimation is only locally informed}
+
+Under Gaussian noise, $\Sigma_t=K_t+\sigma_\eps^2 I_t$ and
+$\mathbf y_t\sim\mathcal N(\lambda\mathbf y_t',\Sigma_t)$; maximizing the marginal
+likelihood over $\lambda$ is equivalent to minimizing
+$Q_t(\lambda)=(\mathbf y_t-\lambda\mathbf y_t')^\top\Sigma_t^{-1}(\mathbf y_t-\lambda\mathbf y_t')$,
+with minimizer $\widehat\lambda_t=(\mathbf y_t'^\top\Sigma_t^{-1}\mathbf y_t)/
+(\mathbf y_t'^\top\Sigma_t^{-1}\mathbf y_t')$. Equivalently, via kernel ridge,
+$Q_t(\lambda)=\min_{g\in\Hk}\{\Hnorm{g}^2+\sigma_\eps^{-2}\sum_i(g(x_i)-y_i+\lambda f'(x_i))^2\}$,
+so $\widehat\lambda_t$ selects the coefficient for which the simplest RKHS
+reconstruction of the observed residuals is easiest --- a statement about the
+queried points only.
+
+\begin{proposition}[Local fit does not control global discrepancy, restated]
+\label{app:prop-local}
+Let $V_t=\operatorname{span}\{k(x_1,\cdot),\dots,k(x_t,\cdot)\}$, assume
+$V_t^\perp\neq\{0\}$, pick $h\in V_t^\perp$ non-zero and set $f_M=f'+Mh$. Then
+(i) $f_M(x_i)=f'(x_i)$ for $i\le t$; (ii) under $y_i=f_M(x_i)+\eps_i$,
+$\eps_i\sim\mathcal N(0,\sigma_\eps^2)$, the law of $(y_1,\dots,y_t)$ given the
+design is independent of $M$, hence so are $\widehat\lambda_t$ and
+$Q_t(\widehat\lambda_t)$; yet (iii) at $\lambda=1$ the true residual is
+$r_1^{(M)}=f_M-f'=Mh$ with $\norm{r_1^{(M)}}_{\Hk}=M\norm{h}_{\Hk}$, arbitrarily
+large.
+\end{proposition}
+\begin{proof}
+(i) For $h\in V_t^\perp$, $h(x_i)=\inner{h}{k(x_i,\cdot)}_{\Hk}=0$ by the
+reproducing property, so $f_M(x_i)=f'(x_i)+Mh(x_i)=f'(x_i)$. (ii) Then
+$y_i=f'(x_i)+\eps_i$ has a distribution not involving $M$; every statistic of the
+queried data, including $\widehat\lambda_t$, $\widehat r^{\mathrm{ridge}}_{t,\widehat\lambda_t}$
+and $Q_t(\widehat\lambda_t)$, has conditional law independent of $M$. (iii) is
+immediate; choosing $M\ge B/\norm{h}_{\Hk}$ makes $\norm{f_M-f'}_{\Hk}\ge B$ for
+any $B$.
+\end{proof}
+
+\begin{remark}
+Thus no bound on $Q_t(\widehat\lambda_t)$, computed from queried data, can imply a
+bound on the global RKHS discrepancy $\norm{f-\lambda f'}_{\Hk}$ without further
+assumptions. A functional prior can be statistically indistinguishable from the
+truth on all queried points while being arbitrarily wrong in an unexplored
+region: marginal-likelihood estimation is only locally informed.
+\end{remark}
+
+\subsection{Adaptive sampling and a self-confirming failure}
+
+Because the design is chosen using the prior-shaped posterior mean, the situation
+compounds: if $f'$ has a local maximum in $\X_{\mathrm{trap}}$ where $f\approx f'$,
+early observations there yield small residuals, $\widehat\lambda_t$ stays
+$\approx1$, and sampling stays inside $\X_{\mathrm{trap}}$. The following makes the
+loop rigorous in a bounded-confidence regime.
+
+\begin{theorem}[Self-confirming failure, restated]
+\label{app:thm-priorfail}
+Let $k$ be normalized ($k(x,x)\le1$). Let $U,\X_{\mathrm{trap}}\subset\X$
+be disjoint open sets and $h\in C_c^\infty(\X)$ with
+$\operatorname{supp}h\subset U$, $0\le h\le1$, and $h(x^\star)=1$
+for some $x^\star\in U$. Consider noiseless GP-UCB with fixed kernel $k$,
+mean prior $f'$, and bounded confidence
+$\sup_t\beta_t\le\bar\beta<\infty$, selecting
+\[
+x_{t+1}\in\argmax_{x\in\X}
+\{\mu_t(x)+\sqrt{\beta_t}\sigma_t(x)\}.
+\]
+Suppose that, for some $\Delta>0$ and $V\in\R$,
+\[
+f'(x)\le V-\sqrt{\bar\beta}-\Delta
+\quad\text{on }U,
+\qquad
+\sup_{x\in\X\setminus U}f'(x)
+=f'(x_{\mathrm{trap}})=V,
+\]
+where $x_{\mathrm{trap}}\in\X_{\mathrm{trap}}$. Set $f=f'+Mh$ with
+$M=V+\Delta-f'(x^\star)$. Then $U$ is never queried and
+$R_T\ge\Delta T$.
+\end{theorem}
+
+\begin{proof}
+By construction, $f(x^\star)=f'(x^\star)+M=V+\Delta$, so
+$\max_{x\in\X}f(x)\ge V+\Delta$.
+We prove by induction that no query enters $U$. Suppose all queries
+up to time $t$ lie outside $U$. Since $\operatorname{supp}h\subset U$
+and observations are noiseless, $Y_t=f'(X_t)$. The GP posterior
+mean therefore satisfies $\mu_t\equiv f'$ on $\X$, while
+$\sigma_t^2(x)\le k(x,x)\le1$. Hence, for every $x\in U$,
+\[
+\mathrm{UCB}_t(x)
+=\mu_t(x)+\sqrt{\beta_t}\sigma_t(x)
+\le V-\sqrt{\bar\beta}-\Delta+\sqrt{\bar\beta}
+=V-\Delta<V.
+\]
+Meanwhile, at $x_{\mathrm{trap}}$,
+\[
+\mathrm{UCB}_t(x_{\mathrm{trap}})
+\ge\mu_t(x_{\mathrm{trap}})
+=f'(x_{\mathrm{trap}})=V.
+\]
+Thus no maximizer of the acquisition belongs to $U$, establishing
+the induction (including $t=0$). Consequently, every query
+satisfies $f(x_t)=f'(x_t)\le V$, whereas
+$\max_{x\in\X}f(x)\ge V+\Delta$. Therefore
+$r_t\ge\Delta$ for all $t$, yielding $R_T\ge\Delta T$.
+\end{proof}
+
+\begin{remark}[Scope and verifications]
+(a) The construction requires the initial design to avoid $U$ (otherwise the loop
+never starts); this is generic since $U$ is an arbitrary small open set.
+(b) The posterior identities on $U$ are exact in the noiseless case; the
+conclusion extends with high probability to sub-Gaussian noise, the strict
+inequality $\mathrm{UCB}_t<V$ on $U$ surviving as long as $2\Delta$ exceeds the
+confidence fluctuations. (c) By Proposition~\ref{app:prop-local}, an adaptive
+$\widehat\lambda_t$ estimated from the queried data remains indistinguishable from
+a correctly specified model along the whole trajectory, since no query reveals
+$Mh$. (d) The failure is tied to \emph{bounded} $\beta_t$: an Adaptive GP-UCB
+that grows the confidence class~\cite{berkenkamp2019} would eventually make
+$\mathrm{UCB}_t$ on $U$ exceed $V$ and escape. This is why the theorem is a
+statement about estimating a prior weight under bounded confidence, not a claim
+that functional priors are unusable.
+\end{remark}

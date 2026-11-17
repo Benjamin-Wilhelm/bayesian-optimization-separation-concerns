@@ -1,0 +1,262 @@
+% ======================================================================
+%  2. Background and critical state of the art
+% ======================================================================
+\section{Background and critical state of the art}
+\label{sec:background}
+
+This section introduces the material required
+to understand the contributions, and organizes the literature by
+\emph{scientific question} rather than paper by paper. The theoretical thread we
+follow is a single argument,
+\[
+\begin{gathered}
+\underbrace{\text{well-specified GP-UCB}}_{\S\ref{sec:bg-gpucb}}
+\;\rightarrow\;
+\underbrace{\text{composite BO}}_{\S\ref{sec:bg-composite}}
+\;\rightarrow\;
+\underbrace{\eps\text{-misspecified GP bandits}}_{\S\ref{sec:bg-misspec}}
+\\[0.1cm]
+\;\rightarrow\;
+\underbrace{\text{convergence despite smoothness misspecification}}_{\S\ref{sec:bg-misspec}}
+\\[0.1cm]
+\;\rightarrow\;
+\boxed{\epsinf(B)\text{ barrier (Sec.~\ref{sec:contrib-tm})}},
+\end{gathered}
+\]
+\vspace{0.1cm}
+which makes precise both why the initial regularity obstruction is only a first
+step and why the quantitative approximation barrier is the stronger statement it
+led to. It then reviews papers to provide guidelines on the specific problems that we study (multiobjective, alpha-prior BO).
+
+\subsection{Gaussian-process Bayesian optimization}
+\label{sec:bg-gpucb}
+
+We consider an unknown objective $f:\X\to\R$ on a compact domain
+$\X\subset\R^d$, observed through noisy queries $y_t=f(x_t)+\eps_t$. A Gaussian
+process prior $f\sim\GP(0,k)$ yields, after $t-1$ observations, a posterior with
+mean $\mu_{t-1}$ and standard deviation $\sigma_{t-1}$ available in closed form.
+The GP-UCB rule of Srinivas et al.~\cite{srinivas2010} selects
+\begin{equation}
+  x_t \;\in\; \argmax_{x\in\X}\;\bigl(\mu_{t-1}(x)+\sqrt{\beta_t}\,\sigma_{t-1}(x)\bigr),
+  \label{eq:bg-gpucb}
+\end{equation}
+trading exploitation ($\mu_{t-1}$) against exploration ($\sigma_{t-1}$). The
+statistical difficulty of a kernel is captured by the \emph{maximum information
+gain} $\gain_T=\max_{|A|=T}\tfrac12\log\det(I+\sigma^{-2}K_A)$, and the central
+guarantee is that, with high probability, cumulative regret is
+$R_T=O(\sqrt{T\beta_T\gain_T})$
+\cite{srinivas2010}. \hfill\Plit
+
+We recall the ingredients (posterior formulas, information gain, the
+high-probability confidence bound and the regret theorem) in
+Appendix~\ref{app:background}; for the GP/RKHS/kernel-ridge connections we follow
+the review of Kanagawa et al.~\cite{kanagawa2018}. \hfill\Plit
+
+\subsection{RKHS assumptions and why kernel choice is a regularity assumption}
+\label{sec:bg-rkhs}
+
+The regret guarantee rests on an assumption that is easy to state and easy to
+overlook: the objective belongs to the reproducing-kernel Hilbert space (RKHS)
+$\Hk$ of the kernel, with bounded norm, $f\in\Hk$ and $\Hnorm{f}\le B$. This is
+not a technicality. Choosing a kernel \emph{is} choosing a function space, and
+hence a regularity assumption on $f$. For stationary kernels the RKHS is a
+Sobolev-type space whose smoothness is dictated by the decay of the spectral
+density: the Mat\'ern-$\nu$ kernel gives $\Hk\simeq H^{\nu+d/2}(\R^d)$, while the
+RBF kernel gives functions that are $C^\infty$ (indeed real-analytic)
+\cite{kanagawa2018}. A classical regularity-transfer result makes the link
+between kernel smoothness and RKHS smoothness explicit.
+
+\begin{theorem}[Regularity transfer, {see Appendix~\ref{app:background}}]
+\label{thm:bg-regtransfer}
+If $k\in C^{2m}(\X\times\X)$ then $\Hk\subset C^m(\X)$; every $f\in\Hk$ is
+$C^m$, and $\partial^\alpha f(x)=\inner{f}{\partial_x^\alpha k(x,\cdot)}_{\Hk}$
+for $|\alpha|\le m$.
+\provbadge{colSpec}{literature, specialized here}
+\end{theorem}
+
+\noindent Revisiting this transfer result was our first route toward
+understanding task-induced misspecification: if the task transformation destroys
+differentiability, and the kernel forces $C^m$ regularity, the transformed
+objective cannot lie in $\Hk$. We treat Theorem~\ref{thm:bg-regtransfer} as
+(specialized) background, not as a novel result, and use it only to motivate the
+target-matching analysis of Section~\ref{sec:contrib-tm}.
+
+\subsection{Composite Bayesian optimization: a direct predecessor}
+\label{sec:bg-composite}
+
+The idea of modelling a latent quantity rather than the objective actually
+optimized is \emph{not} new to this work. Astudillo and
+Frazier~\cite{astudillo2019} study \emph{composite} objectives $g(h(x))$, where
+$h$ is expensive and $g$ is known and cheap; they model $h$ with a GP and apply
+$g$ to the induced posterior when forming the acquisition, and they prove
+asymptotic consistency for their EI-CF algorithm. Their examples include
+calibration objectives $\norm{h(x)-y_{\mathrm{obs}}}$, which are structurally very
+close to target matching. \hfill\Plit
+
+We therefore do \emph{not} claim that ``model the phenomenon rather than the
+composite objective'' is a novel idea. The gap we address is different: composite
+BO exploits \emph{known} composite structure for statistical efficiency, but does
+not characterize the RKHS regularity mismatch created by directly modelling a
+\emph{non-smooth} task transformation, nor the norm--accuracy trade-off such a
+transformation induces. Our target-matching analysis investigates precisely this
+modelling distinction, through RKHS misspecification, a quantitative
+approximation barrier, and confidence-set pushforward pushforward arguments that preserve valid uncertainty bounds and yield convergence guarantees for UCB-based acquisition policies.
+\hfill\Psynth
+
+\subsection{Misspecification: leaving the RKHS need not mean failure}
+\label{sec:bg-misspec}
+
+Suppose the optimized function falls outside the assumed RKHS. Two very different
+things can then be true, and they must be kept apart:
+\begin{enumerate}
+  \item a standard \emph{guarantee} is lost (the confidence bound and regret
+        proof of \S\ref{sec:bg-gpucb} no longer apply);
+  \item the algorithm \emph{actually fails} (e.g.\ incurs linear regret).
+\end{enumerate}
+Two lines of work delineate this gap and are the direct bridge to our
+contribution.
+
+\paragraph{$\eps$-misspecified GP bandits.}
+Bogunovic and Krause~\cite{bogunovic2021} consider a true function $g$ that is
+only \emph{approximately} in the RKHS,
+$\inf_{\Hnorm{h}\le B}\norm{g-h}_\infty\le\eps$, and derive robust GP-bandit
+guarantees whose regret degrades gracefully in the misspecification level $\eps$.
+This reframes the right question: the relevant quantity is not whether
+$g\in\Hk$, but \emph{how accurately} $g$ can be approximated by an RKHS ball of
+controlled radius. \hfill\Plit
+
+\paragraph{Convergence despite smoothness misspecification.}
+Wynne, Briol and Girolami~\cite{wynne2021} show, complementarily, that
+\[
+g\notin\Hk \;\;\not\Rightarrow\;\; \text{GP approximation cannot converge}.
+\]
+They give convergence rates for GP posterior means under smoothness
+misspecification, controlled by the geometry of the design (fill distance,
+quasi-uniformity), and derive BO implications under exploration strategies that
+produce sufficiently regular designs. Their analysis can even accommodate
+sequences of adaptively chosen kernel hyperparameters, under explicit bounds on
+the resulting smoothness and norm-equivalence constants --- which should
+\emph{not} be read as a licence for arbitrary marginal-likelihood tuning.
+\hfill\Plit
+
+\paragraph{Consequence for our programme.}
+These two results are exactly why the report does not stop at a qualitative
+non-membership theorem. They motivate the progression
+\emph{loss of differentiability} $\to$ \emph{RKHS non-membership} $\to$
+\emph{recognition that out-of-RKHS functions may still be consistently
+approximated} $\to$ \emph{a quantitative, norm-constrained approximation
+barrier}. The barrier (Section~\ref{sec:contrib-tm}) answers the inverse of
+Bogunovic--Krause's question for the structured transformation $g=\abs{f-T}$:
+how rapidly must RKHS complexity grow to approximate the task-transformed
+objective? We are careful \emph{not} to combine Bogunovic--Krause's generic
+misspecification lower bounds mechanically with our barrier to claim a lower
+regret bound for task-in-model GP-UCB: their lower bounds concern a broader
+adversarial class and do not automatically specialize to the family
+$g=\abs{f-T}$. \hfill\Psynth
+
+\paragraph{Online hyperparameter estimation.}
+Our experiments re-estimate GP hyperparameters online by marginal likelihood. 
+However, the standard GP-UCB guarantees used in our theoretical analysis assume
+fixed, known kernel parameters together with an appropriate RKHS-norm bound.
+Online MLE therefore falls outside the scope of these guarantees in general.
+Berkenkamp et al.~\cite{berkenkamp2019} show that naive hyperparameter adaptation
+can lead to over-smooth models and insufficient exploration, and recover
+guarantees by deliberately expanding the candidate function class over time.
+Bull's analysis of expected improvement~\cite{bull2011} similarly illustrates
+how data-driven scale estimation can suppress exploration. We use these results
+to contextualize the behavior observed in our experiments, rather than as part
+of the main theoretical guarantees developed here.\hfill\Plit
+
+\subsection{Multi-objective Bayesian optimization}
+\label{sec:bg-mo}
+
+With a vector objective $F=(f_1,\dots,f_m)$ there is no single optimum but a
+\emph{Pareto front} of non-dominated trade-offs. The standard reduction is
+\emph{scalarization}: pick a family $\{\prm_\lambda:\R^m\to\R\}$ and solve
+$\max_x\prm_\lambda(F(x))$ with any single-objective optimizer. Two properties
+matter. A scalarization is \emph{sound} if every maximizer is Pareto-optimal
+(guaranteed by coordinate-wise monotonicity), and \emph{complete} if varying
+$\lambda$ traces out the whole front. Linear scalarizations are sound but not
+complete --- they only reach the convex hull of the front --- whereas
+Chebyshev and hypervolume scalarizations are complete. \hfill\Plit
+
+For random-scalarization methods we build on Paria et al.~\cite{paria2019}
+(random scalarizations for multi-objective BO) and, centrally, on Golovin and
+Zhang~\cite{golovin2020}. Golovin and Zhang introduce \emph{random hypervolume
+scalarizations} and prove a remarkable identity rewriting the dominated
+hypervolume as an expectation of a maximum of scalarized values; from it they
+obtain UCB/Thompson-sampling convergence guarantees and a generic reduction from
+a convergent single-objective optimizer to Pareto-front approximation.
+\hfill\Plit
+
+\begin{quote}
+\itshape Attribution.\ The random hypervolume scalarization, the
+regret--hypervolume identity, the associated convergence guarantees, and the
+generic single-objective-to-Pareto reduction are due to Golovin and
+Zhang~\cite{golovin2020} and are used here as imported theory. Our contribution
+in the multi-objective setting is the separation-of-concerns interpretation and
+the pushforward-confidence analysis of these constructions
+(Section~\ref{sec:contrib-mo}), not the invention of the scalarization machinery.
+\end{quote}
+
+Differentiable expected-hypervolume-improvement methods
+\cite{daulton2020} are an alternative, direct route to modern multi-objective
+BO; they are peripheral to our modelling question and are mentioned only for
+completeness. The hypervolume indicator itself, and the strength-Pareto
+viewpoint, go back to Zitzler and Thiele~\cite{zitzler1999}. \hfill\Plit
+
+\subsection{Prior-guided Bayesian optimization: two meanings of ``prior''}
+\label{sec:bg-prior}
+
+Prior knowledge enters BO in two fundamentally different ways, and conflating
+them is exactly the failure mode we study.
+
+\paragraph{A spatial prior at the decision level.}
+Guay Hottin et al.~\cite{guayhottin2025} encode prior information about the
+probable \emph{location} of the optimizer through an acquisition modulation of
+the $\alpha$-$\pi$BO form,
+\[
+A_t(x)\,\bigl[\alpha\,\pi(x)+(1-\alpha)\bigr],
+\]
+building on the user-belief acquisition $\pi$BO of Hvarfner et
+al.~\cite{hvarfner2022}. For expected improvement the method retains the standard
+convergence order up to a controlled factor $1/(1-\alpha)$. This is the canonical
+example of a \emph{spatial} prior acting at the decision level: because the
+weight is bounded below, even a misspecified prior cannot eliminate any region of
+the search space. \hfill\Plit
+
+\paragraph{A functional prior at the model level.}
+Cheng et al.~\cite{cheng2024} instead assume that a complete surrogate function
+$f'$ is informative about the \emph{entire} objective and model
+$f\sim\GP(\lambda f',k)$. For fixed $\lambda$ the relevant complexity becomes
+$\norm{f-\lambda f'}_{\Hk}$, minimized at the oracle RKHS-projection coefficient
+$\lambda^\star_{\rkhs}=\inner{f}{f'}_{\Hk}/\norm{f'}^2_{\Hk}$. This is important
+because it \emph{prevents} an overly broad claim that non-zero GP means or
+function priors are intrinsically undesirable: a genuine global functional prior
+can be theoretically beneficial. \hfill\Plit
+
+\paragraph{The gap we address.}
+Our critique is narrower than ``model-level priors are bad''. It is that
+\begin{quote}
+\itshape information about where the optimizer is likely to lie is not, without
+additional assumptions, information about the entire response surface.
+\end{quote}
+We use Cheng et al.\ to motivate an analysis of the gap between the inaccessible
+\emph{global} RKHS criterion and coefficients estimated only from adaptively
+sampled observations, and we clearly distinguish their proposed estimator from
+our subsequent local-versus-global and self-confirmation analysis
+(Section~\ref{sec:contrib-prior}). \hfill\Psynth
+
+\subsection{Critical synthesis: the gap addressed by this internship}
+\label{sec:bg-synthesis}
+
+The results above each study a \emph{particular} downstream task or a
+\emph{generic} misspecification class. Composite BO exploits known structure for
+efficiency; $\eps$-misspecified and smoothness-misspecified analyses tell us that
+leaving the RKHS costs a guarantee but need not cost convergence; random
+scalarizations turn single-objective optimizers into Pareto solvers; spatial and
+functional priors sit at opposite ends of the ``where does the prior act''
+spectrum. What is missing is a study of the \emph{modelling boundary} itself ---
+the line between the latent phenomenon $f$ and the task-specific decision
+transformation $\prm$ --- viewed uniformly across tasks. Placing that boundary is
+the object of the next three sections.

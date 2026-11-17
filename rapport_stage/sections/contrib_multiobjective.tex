@@ -1,0 +1,263 @@
+% ======================================================================
+%  4. Separation of concerns: multi-objective optimization
+% ======================================================================
+\FloatBarrier
+\section{Separation of concerns: multi-objective optimization}
+\label{sec:contrib-mo}
+
+Target matching is one nonlinear decision map on a scalar phenomenon. The same
+question --- where should the task transformation act --- reappears, with a richer
+structure, when several responses compete. In the laboratory this is the case of
+a stimulation that simultaneously drives, say, a hand, an elbow and a biceps
+activation: there is no single best configuration, only a trade-off surface.
+
+\subsection{Pareto framework and scalarization (background)}
+\label{sec:contrib-mo-pareto}
+
+We optimize a vector objective $F=(f_1,\dots,f_m):\X\to\R^m$. A point $x'$
+Pareto-dominates $x$ if $F(x)\preceq F(x')$ coordinate-wise with at least one
+strict inequality; the \emph{Pareto set} collects the non-dominated points and
+its image is the \emph{Pareto front} $Y^\star$. The standard reduction is
+scalarization: choose $\{\prm_\lambda\}_{\lambda}$ and solve
+$\max_x\prm_\lambda(F(x))$. Monotone scalarizations are \emph{sound}; only some
+are \emph{complete} (Section~\ref{sec:bg-mo}). All of this is classical and used
+as background~\cite{zitzler1999,paria2019}. \hfill\Plit
+
+\subsection{Right and wrong for a fixed scalarization}
+\label{sec:contrib-mo-rightwrong}
+
+Fix a preference $\lambda$. The separation-of-concerns contrast is exactly as
+before, now applied to the scalarization $\prm_\lambda$:
+\begin{description}
+  \item[Separated / \RIGHT.] Model each objective $f_i$ with its own GP (a
+        \texttt{ModelListGP} over the raw vector observations $F$), form
+        per-objective upper confidence bounds, and apply $\prm_\lambda$ to the
+        \emph{acquisition vector}: $a(x)=\prm_\lambda(\mu+\sqrt{\beta}\,\sigma)$.
+  \item[Task-in-model / \WRONG.] Fit a single scalar GP directly to the
+        scalarized targets $g_\lambda(x)=\prm_\lambda(F(x))$, then apply a plain
+        scalar UCB.
+\end{description}
+The two share the same GP back-end and differ \emph{only} in where the
+scalarization is applied. Because $\prm_\lambda$ can be non-smooth (Chebyshev and
+hypervolume scalarizations are minima of linear maps, with kinks on their
+commutation sets), the target-matching phenomenon recurs: modelling
+$g_\lambda$ directly can force the surrogate to represent kinks that modelling
+$F$ avoids. Target matching is the special case $m=1$, $\prm(u)=-\abs{u-T}$.
+
+\subsection{Pushforward confidence and regret bound}
+\label{sec:contrib-mo-pushforward}
+
+Our theoretical contribution here is to show that the \RIGHT{} formulation admits
+a clean regret guarantee for \emph{any} Lipschitz scalarization, by transporting
+the per-objective confidence intervals through $\prm_\lambda$.
+
+\begin{theorem}[Pushforward confidence and regret bound, {proof in Appendix~\ref{app:mo}}]
+\label{thm:mo-pushforward}
+For $i=1,\dots,m$ let $f_i\in\mathcal H_{k_i}$ with
+$\norm{f_i}_{\mathcal H_{k_i}}\le B_i$, observed with conditionally
+$R_i$-sub-Gaussian noise, and maintain one GP per objective with mean $\mu_{i,t}$
+and standard deviation $\sigma_{i,t}$. Let $\prm:\R^m\to\R$ be $L$-Lipschitz
+w.r.t.\ $\norm{\cdot}_\infty$ and set $g=\prm\circ F$. Choose $\beta_t$ so that
+the joint confidence event
+$\{\abs{f_i(x)-\mu_{i,t-1}(x)}\le\sqrt{\beta_t}\sigma_{i,t-1}(x)\ \forall x,t,i\}$
+holds with probability $\ge1-\delta$. Selecting $x_t$ by the optimistic
+pushforward acquisition
+$U_t(x)=\sup\{\prm(u):u_i\in C_{i,t}(x)\}$ gives, on that event,
+\begin{equation}
+  R_T^{g} \;=\; \sum_{t=1}^T\bigl(g(x^\star)-g(x_t)\bigr)
+  \;\le\; C\,L\sqrt{T\,\beta_T\sum_{i=1}^m\gain_{i,T}}
+  \;=\; O\!\left(L\sqrt{m\,T\,\beta_T\,\gain_T}\right).
+  \label{eq:mo-pushforward}
+\end{equation}
+\provbadge{colContrib}{personal contribution}
+\end{theorem}
+
+The proof (Appendix~\ref{app:mo}) is the multi-dimensional analogue of
+Theorem~\ref{thm:tm-soc}: optimism holds because the true vector lies in the
+confidence box, and the $L$-Lipschitz property transports the box's width into a
+bound on $U_t(x_t)-g(x_t)$. Monotonicity is \emph{not} required --- only Lipschitz
+continuity --- which is why target matching ($\prm(u)=-\abs{u-T}$, $1$-Lipschitz,
+non-monotone) is recovered as the $m=1$ case. This is the sense in which the
+pushforward-confidence viewpoint is genuinely derived in this work; where it
+specializes constructions of Golovin and Zhang we say so explicitly below.
+
+\subsection{Beyond a single preference: hypervolume and random scalarizations}
+\label{sec:contrib-mo-hv}
+
+Driving the scalarized regret to zero for a \emph{fixed} $\prm_\lambda$ only
+recovers one point of the front. To measure progress towards the \emph{whole}
+front one uses the dominated hypervolume $\HV_z(Y)$ relative to a reference point
+$z$. The machinery that turns hypervolume into something optimizable is due to
+Golovin and Zhang~\cite{golovin2020}, and we attribute it in full:
+
+\begin{quote}
+\itshape The random hypervolume scalarization
+$\prm_\lambda(y)=\min_i\bigl(\max(0,(y_i-z_i)/\lambda_i)\bigr)^m$, the identity
+rewriting $\HV_z(Y)$ as $c_m\,\E_{\lambda}\max_{y\in Y}\prm_\lambda(y-z)$, the
+concentration of its Monte-Carlo estimate, and the resulting UCB / Thompson
+hypervolume-regret guarantees, are Theorems and Lemmas of
+Golovin and Zhang~\cite{golovin2020}. We use them as imported results; see
+Appendix~\ref{app:mo} for the precise statements with their original attribution.
+\end{quote}
+
+Our own addition (Appendix~\ref{app:mo}) is only to observe that
+Theorem~\ref{thm:mo-pushforward}, being a time-varying instantaneous argument,
+combines with a freshly sampled preference at each round to reproduce the
+random-scalarization regret order, with an extra factor $L_\rho$ uniform in
+$\lambda$; this is a re-derivation in our pushforward language, not a new rate.
+\hfill\Psynth
+
+\subsection{Two strategies, and the separation-of-concerns reading}
+\label{sec:contrib-mo-sharing}
+
+To reconstruct the front there are two natural strategies.
+\begin{enumerate}
+  \item \textbf{$L$ independent fixed-scalarization runs.} Draw $L$ preferences
+        once and run a separate single-objective scalarized optimization for each
+        (\cite{golovin2020}, generic reduction). Any surrogate --- \RIGHT{} or
+        \WRONG{} --- can be plugged in, but the $L$ runs are treated as
+        statistically independent.
+  \item \textbf{One shared objective-wise surrogate with a resampled preference.}
+        Keep a single \texttt{ModelListGP} over $F$; at every iteration draw a
+        \emph{new} preference $\lambda_t$, refit the shared posterior on all data
+        so far, and query the scalarized-UCB point (\cite{golovin2020},
+        Algorithm~1).
+\end{enumerate}
+
+The contribution of this report is \emph{not} to claim the second algorithm as
+new --- it is Golovin and Zhang's. It is to give it a separation-of-concerns
+reading that explains \emph{why} it is more efficient:
+
+\begin{takeaway}
+Because the \RIGHT{} model is \emph{preference-independent} --- it models the
+objective map $F$, not any scalarized quantity --- a single vector observation
+$F(x_t)$ is valid for \emph{every} future preference and feeds all of them. The
+$L$ independent scalarized surrogates of strategy~1 cannot share this
+information: a query informative for one preference is wasted on the others. A
+task-in-model surrogate cannot even be resampled, since observations
+$(x_t,\prm_{\lambda_s}(F(x_t)))$ for varying $\lambda_s$ are not evaluations of a
+single latent function and make a single scalar GP statistically misspecified.
+\end{takeaway}
+
+This is exactly the separation principle at the level of \emph{information reuse}:
+keeping the task out of the model is what makes one experiment inform all future
+decisions. \hfill\Psynth
+
+% ======================================================================
+\subsection{Experiment C --- multi-objective optimization}
+\label{sec:contrib-mo-exp}
+
+We study a bi-objective ($m=2$) problem by scalarization, comparing where the
+scalarization is applied. \hfill\Pexp
+
+\paragraph{Question / hypothesis.}
+(i) For a \emph{fixed} scalarization, does the separated ``objective GPs then
+scalarize'' formulation match or beat the task-in-model ``model the scalarized
+quantity'' formulation? (ii) For \emph{whole-front} recovery, does the shared
+preference-independent model cover the Pareto front more densely than independent
+scalarized runs?
+
+\paragraph{Benchmarks, dimension.}
+The ZDT bi-objective problems, $\texttt{zdt1}$ (convex, fully supported front)
+and $\texttt{zdt2}$ (concave front with a non-supported region), each in $d=2$
+and $d=6$. The analytic front is used only for evaluation (per-preference optimum
+$\prm^\star$ and ideal hypervolume $\HV^\star$), sampled densely. The whole
+pipeline runs in the oriented maximization convention $F=-f_{\mathrm{raw}}$; a
+kink in a linear-scalarization coverage gap on \texttt{zdt2} is a limitation of
+the scalarization \emph{family}, not of \RIGHT{} vs \WRONG.
+
+\paragraph{Scalarizations and preference protocol.}
+Two scalarizations, \texttt{linear} (weighted sum) and \texttt{hypervolume}
+(Golovin--Zhang radial). Two experiment modes that must not be conflated:
+\emph{fixed} mode runs, per seed, an independent scalarized BO for each
+$(\text{scalarization}\times\text{angle})$ over a deterministic angle grid
+$\theta\in\{10,30,45,60,80\}^\circ$ (only the initial Sobol design is shared
+between \RIGHT{} and \WRONG{} within a case); \emph{pareto} mode compares, at
+equal global budget $N=500$ with the hypervolume scalarization only, the shared
+sequential algorithm with a resampled preference against independent
+fixed-preference subruns. Evaluation preferences in pareto mode are $2048$
+weights drawn from an independent RNG and shared across all methods.
+
+\paragraph{Reference point and dominance.}
+Fixed oriented reference $z=(-1.1,-1.1)$ for both problems (dominated by the whole
+front); maximization dominance; exact 2-D running hypervolume by rectangle sweep.
+
+\paragraph{Kernel, transforms, noise, hyperparameters.}
+Mat\'ern-$5/2$ ARD; inputs normalized, outputs standardized. Unlike Experiments A
+and B, Experiment~C uses an \emph{inferred-noise} \texttt{SingleTaskGP} with
+$\sigma=0$ (noise variance learned by marginal likelihood). Hyperparameters refit
+every iteration.
+
+\paragraph{Exploration schedule.}
+Two variants are run for every case: a growing $\beta_t=8+\ln(t+1)$
+(\texttt{LOG\_BETA}) and a constant $\beta_t=8$ (\texttt{beta8}); which one is
+canonical is left as a reporting choice (see Appendix~\ref{app:exp} and
+Section~\ref{sec:discussion}). The \texttt{matern\_gamma} schedule of
+Experiment~A is not used here.
+
+\paragraph{Budget, initial design, seeds.}
+Fixed mode: budget $50$ ($d{=}2$) / $200$ ($d{=}6$), Sobol init $5$ / $12$. Pareto
+mode: global budget $500$, init $5$ (shared algorithm) or $2$ per subrun. $50$
+seeds ($1$--$50$); within a seed and mode all compared methods share the initial
+Sobol design (paired). Acquisition optimizer: $20$ restarts, $1024$ raw samples,
+$q=1$.
+
+\paragraph{Metrics.}
+Fixed mode: scalarized best-so-far value, scalarized simple regret
+$\prm^\star-b_t$ (primary), instantaneous and cumulative scalarized regret. Pareto
+mode: exact running hypervolume and hypervolume regret $\HV^\star-\HV_z(Y_t)$, and
+the empirical-Bayes scalarized regret averaged over the $2048$ evaluation
+preferences. Pareto-front dominated/non-dominated masks are used only for
+single-seed scatter plots (there is no aggregated coverage metric). Calibration
+diagnostics are not computed for Experiment~C.
+
+\paragraph{Aggregation and confidence.}
+Median curves with an inter-seed $25$--$75$ percentile band (\emph{not} bootstrap,
+unlike Experiments A/B); final-value summaries; in fixed mode a paired one-sided
+Wilcoxon signed-rank test on the final scalarized simple regret
+(\WRONG{}$-$\RIGHT); no paired test in the pareto pipeline.
+
+\paragraph{Results and interpretation.}
+Two findings (Figures~\ref{fig:mo-fixed}--\ref{fig:mo-pareto}).
+\emph{(i) Fixed scalarization.} The two methods optimize the same scalar task but
+model different objects; where the scalarization is benign the curves are nearly
+indistinguishable (e.g.\ linear at $80^\circ$), while where the scalarization is
+sharp the separated method dominates (e.g.\ hypervolume at $10^\circ$).
+\emph{(ii) Whole-front recovery.} Faster scalarized regret does not by itself
+imply faster front discovery: the shared, preference-independent
+\RIGHT{} algorithm covers the true front markedly more densely than the
+independent-subruns baseline, whose queries agglutinate on the boundaries
+$f_1=0$ and $f_1=1$ and leave the centre of the front sparsely covered --- a
+direct empirical signature of the information-sharing argument of
+Section~\ref{sec:contrib-mo-sharing}. We note explicitly that the
+\texttt{fixed\_zdt2\_d6} cell is incomplete ($42/50$ and $41/50$ seeds for the two
+$\beta$ variants; Appendix~\ref{app:exp}).
+
+% --- Experiment C figures ----------------------------------------------
+\figauto[0.95\linewidth]{figures/EXPC/Scalarization_Multiobjectif.png}{%
+  \textbf{Fixed-scalarization experiment} ($2\times3$ grid): linear at $80^\circ$
+  (top) vs hypervolume at $10^\circ$ (bottom); columns are best-so-far, simple
+  regret, cumulative regret; \RIGHT{} (SoC) vs \WRONG. At $80^\circ$ the two are
+  indistinguishable; at $10^\circ$ separation dominates. Illustrates
+  Section~\ref{sec:contrib-mo-rightwrong}.}{fig:mo-fixed}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{subfigure}[b]{0.32\linewidth}
+    \centering\figph[\linewidth]{figures/EXPC/hypervolume.png}
+    \caption{Hypervolume vs evaluations.}
+  \end{subfigure}\hfill
+  \begin{subfigure}[b]{0.32\linewidth}
+    \centering\figph[\linewidth]{figures/EXPC/Pareto_front_right.png}
+    \caption{Front coverage, \RIGHT{} (shared vs subruns).}
+  \end{subfigure}\hfill
+  \begin{subfigure}[b]{0.32\linewidth}
+    \centering\figph[\linewidth]{figures/EXPC/Pareto_front_wrong_alg2.png}
+    \caption{Front coverage, \WRONG{} subruns.}
+  \end{subfigure}
+  \caption{\textbf{Whole-front recovery, Experiment~C.} The shared,
+  preference-independent model (b) covers the true front more densely than
+  independent scalarized subruns (c); faster scalarized regret does not imply
+  faster front discovery. Median curves with $25$--$75$ percentile bands.}
+  \label{fig:mo-pareto}
+\end{figure}

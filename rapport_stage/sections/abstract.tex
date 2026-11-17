@@ -1,0 +1,59 @@
+% ======================================================================
+%  Abstract
+% ======================================================================
+\begin{center}
+  {\Large\bfseries Abstract}
+\end{center}
+\vspace{0.4cm}
+
+\noindent
+At the sciNeurotech Lab, neural responses to stimulation parameters are unknown
+and expensive to evaluate, which makes Gaussian-process Bayesian optimization
+(GPBO) a natural tool for driving stimulation experiments. Crucially, the
+\emph{same} biological response can later serve very different scientific goals:
+matching a prescribed target level, trading off several competing responses,
+optimizing under constraints, or exploiting prior knowledge about promising
+regions. This raises a modelling question that cuts across all these tasks:
+\emph{where should task-specific information enter the Bayesian-optimization
+pipeline?}
+
+This report develops and studies a \emph{separation-of-concerns} (SoC) principle:
+model the underlying phenomenon $f$ faithfully with a Gaussian process, and
+encode the task-specific transformation at the decision (acquisition) level
+whenever possible, rather than folding it into the statistical model. We contrast
+this \emph{separated} formulation with the \emph{task-in-model} formulation, in
+which a GP is fitted directly to the transformed objective $\prm\circ f$, and we
+ask when moving task information into the model changes the assumptions on which
+GPBO relies.
+
+On the theoretical side, the central contribution is a study of
+\emph{task-induced misspecification} for target matching: the transformation
+$g=\abs{f-T}$ creates a cusp at the target level that, under smooth-kernel
+assumptions, pushes $g$ outside the assumed reproducing-kernel Hilbert space
+(RKHS). Because mere non-membership is a weak statement, we sharpen it into a
+\emph{quantitative approximation barrier} that lower-bounds how well $g$ can be
+approximated by an RKHS ball of controlled radius. We complement this with a
+positive result: keeping the GP on $f$ and pushing its confidence interval
+through the task recovers a GP-UCB-type regret guarantee. The same
+pushforward-confidence viewpoint is then extended to multi-objective
+scalarization and to prior-guided optimization, where we analyse the gap between
+the (inaccessible) global RKHS criterion and coefficients estimated only from
+adaptively sampled data, and exhibit a self-confirming feedback mechanism as well as a possible convergence failure when the prior knowledge is put directly in the model.
+
+On the experimental side, three controlled studies (target matching,
+multi-objective optimization, prior-guided optimization) compare the separated
+and task-in-model formulations on standard benchmarks, with matched budgets,
+shared initial designs and paired statistical tests. They consistently favour
+separation, most sharply on deceptive low-dimensional problems, while narrowing
+in higher dimensions.
+
+The main limitation is deliberately stated: our results establish
+\emph{misspecification} and \emph{approximation} barriers, not a general lower
+regret bound for the task-in-model strategy. RKHS misspecification does not by
+itself imply empirical failure, and a true lower bound for task-in-model GP-UCB
+remains open.
+
+\vspace{0.4cm}
+\noindent\textbf{Keywords:} Bayesian optimization, Gaussian processes, RKHS,
+model misspecification, target matching, multi-objective optimization,
+prior-guided optimization, neurostimulation.

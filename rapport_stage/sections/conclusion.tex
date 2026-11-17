@@ -1,0 +1,59 @@
+% ======================================================================
+%  7. Conclusion
+% ======================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+This internship was motivated by a methodological question raised by Marco
+Bonizzato in the context of scientific applications of Bayesian optimization.
+At the sciNeurotech Lab, Bayesian optimization is a natural tool for optimizing
+expensive and unknown responses to neural stimulation. More broadly, the project
+was driven by the need for a clear modelling principle that can prevent
+task-specific choices from being incorporated into Bayesian-optimization models
+without sufficient theoretical justification (A problem that can naturally arise in applied work, as encoding the task directly in the surrogate is often the most intuitive modelling choice.). The guiding idea is that, whenever
+possible, the surrogate should model the underlying phenomenon, while
+task-specific structure should be introduced at the decision or acquisition
+level. This principle leads to a common structural question, investigated here
+across target matching, multi-objective optimization and prior-guided
+optimization: \emph{where should task-specific information enter the
+Bayesian-optimization pipeline?}
+
+
+The answer developed here is a separation-of-concerns principle:
+\begin{center}
+\emph{the phenomenon may remain the same while the scientific task changes; model
+the phenomenon $f$ faithfully, and encode the task in the acquisition whenever
+possible.}
+\end{center}
+
+For target matching, keeping the task out of the model preserves RKHS regularity
+and, through a pushforward of the confidence interval, a GP-UCB regret guarantee
+(Theorem~\ref{thm:tm-soc}); folding the target into the model forces the surrogate
+to represent a cusp, at a quantifiable RKHS cost (Theorem~\ref{thm:tm-barrier}).
+For multi-objective optimization, the same pushforward argument covers any
+Lipschitz scalarization (Theorem~\ref{thm:mo-pushforward}), and separating the
+task from the model is precisely what lets one vector observation inform every
+future preference. For prior-guided optimization, a spatial prior can be placed in
+the acquisition with a controlled, never-vanishing effect, whereas a functional
+prior estimated from an adaptively chosen design can lock onto a wrong belief
+through a self-confirming loop (Theorem~\ref{thm:prior-failure}). Three controlled
+experiments support the same conclusion, most strongly where the transformed
+geometry is deceptive.
+
+What the internship establishes is therefore a coherent case for keeping two
+levels separate - the statistical model of the latent phenomenon and the
+task-specific decision transformation - together with several mechanisms
+explaining why this separation can matter, including regularity mismatch,
+confidence-set pushforward, and self-confirming feedback under adaptive sampling.
+Several directions remain open. A first priority is to deepen the probabilistic
+analysis of misspecification, beyond RKHS approximation, in order to understand
+how directly modelling a transformed objective distorts posterior uncertainty and
+calibration. A second is to broaden the empirical validation through controlled
+ablations and diagnostic benchmarks designed to isolate these mechanisms. Finally,
+extending the separation-of-concerns principle to constrained Bayesian
+optimization would test its relevance in a setting where task information enters
+through feasibility rather than through the objective itself. A genuine lower
+regret bound for the task-in-model strategy would provide a stronger algorithmic
+separation, but our current results should instead be viewed as approximation and
+misspecification results rather than as evidence that such a failure is
+unavoidable.

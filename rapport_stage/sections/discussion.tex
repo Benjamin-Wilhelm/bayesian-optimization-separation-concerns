@@ -1,0 +1,82 @@
+% ======================================================================
+%  6. Discussion and limitations
+% ======================================================================
+\FloatBarrier
+\section{Discussion and limitations}
+\label{sec:discussion}
+
+It is worth separating cleanly the different epistemic statuses of the results in
+this report, because the separation-of-concerns thesis is easy to overstate.
+
+\paragraph{Theorem vs empirical observation vs interpretation vs open problem.}
+\begin{itemize}
+  \item \emph{Theorems.} The regularity obstruction
+        (Proposition~\ref{prop:tm-nonmember}), the quantitative approximation
+        barrier (Theorem~\ref{thm:tm-barrier}), the positive target-matching and
+        pushforward regret bounds (Theorems~\ref{thm:tm-soc},
+        \ref{thm:mo-pushforward}), the safe UCB adaptation
+        (Proposition~\ref{prop:prior-safe}), the local-vs-global discrepancy
+        proposition (Proposition~\ref{prop:prior-local}) and the self-confirming
+        failure construction (Theorem~\ref{thm:prior-failure}) are proved
+        statements, under explicitly stated assumptions.
+  \item \emph{Empirical observations.} Experiments A--C show that the separated
+        formulation is at least as good as, and often much better than, the
+        task-in-model formulation, most sharply on deceptive low-dimensional
+        problems and less so as dimension grows.
+  \item \emph{Interpretations.} The separation-of-concerns reading, the
+        information-sharing explanation in multi-objective BO, and the
+        self-confirmation narrative are syntheses that organize the results; they
+        are argued, not proved as theorems.
+  \item \emph{Open problems.} Several central questions remain open, below.
+\end{itemize}
+
+\paragraph{RKHS misspecification does not imply empirical failure.}
+This is the most important caveat. Proposition~\ref{prop:tm-nonmember} and
+Theorem~\ref{thm:tm-barrier} say that the task-in-model surrogate is misspecified
+and expensive to approximate in RKHS norm; by the results of
+Section~\ref{sec:bg-misspec}, this need not prevent convergence. The empirical
+failures we observe are real but benchmark- and budget-dependent, and they should
+not be read as a proof that task-in-model methods cannot work.
+
+\paragraph{The approximation barrier is not a lower regret bound.}
+Theorem~\ref{thm:tm-barrier} lower-bounds an \emph{approximation} quantity and,
+combined with robust-misspecification analyses, degrades the best available
+\emph{upper certificate} for the task-in-model surrogate. It does not lower-bound
+its realized regret. Three obstructions prevent a mechanical conversion:
+Bogunovic--Krause lower bounds concern a broader adversarial class; their
+construction uses perturbations more pathological than a Lipschitz kink; and the
+minimax cost of a Mat\'ern ball of radius $B$ is not linear in $B$, which changes
+the exponent. A genuine lower regret bound for task-in-model GP-UCB on the family
+$g=\abs{f-T}$ with an explicit adversarial family of kink instances that are
+statistically hard to distinguish remains open. \hfill\Popen
+
+\paragraph{Hyperparameter re-estimation.}
+All experiments refit hyperparameters online by marginal likelihood. This is
+practical but, as Berkenkamp et al.~\cite{berkenkamp2019} and Bull~\cite{bull2011}
+show, not automatically covered by fixed-parameter guarantees; it can trigger the
+self-confirming loop of Theorem~\ref{thm:prior-failure}. A cleaner treatment
+would use an Adaptive GP-UCB that expands the function class over time, and would
+test whether it removes the intermittent failures of the adaptive $\lambda$-$\pi$
+method.
+
+\paragraph{Noise, rough kernels, probabilistic misspecification.}
+Our experiments are noiseless; the theory is stated for sub-Gaussian noise but not
+tested under it. The kernel-regularity ablation (Mat\'ern-$1/2$ vs $5/2$ vs RBF)
+is designed to disentangle a smoothness mismatch from a model/decision confusion,
+but a rough kernel matched to the transformed objective's regularity is a
+possible ``fix'' for the task-in-model method that we have not fully explored.
+Finally, our analysis is in the frequentist RKHS setting; the Bayesian
+sample-path setting (where $f$ is drawn from the GP prior) is complementary and
+not equivalent, and a probabilistic misspecification that i started needs to be carried out to complete our points.
+
+\paragraph{Limitations of the multi-objective study.}
+Experiment~C reports
+no aggregated Pareto-coverage metric (front coverage is shown only on single-seed
+scatter plots). A quantitative, seed-aggregated coverage indicator would
+strengthen the whole-front claim.
+
+\paragraph{Constrained BO as future work.}
+Constrained optimization ($\max_x f(x)$ s.t.\ $c(x)\le0$) is the natural fourth
+instance of the same principle : model $f$ and $c$, and encode feasibility in
+the decision but we treat it only as a perspective here, with at most one
+canonical citation, rather than as a developed contribution.

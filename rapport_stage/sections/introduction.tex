@@ -1,0 +1,194 @@
+% ======================================================================
+%  1. Introduction
+% ======================================================================
+\section{Introduction}
+\label{sec:intro}
+
+\subsection{Scientific and laboratory context}
+\label{sec:intro-context}
+
+The sciNeurotech Lab studies how targeted electrical stimulation of the nervous
+system can be used to drive and restore motor function. In a typical experiment,
+a stimulation configuration~$x$, an electrode, a current amplitude, a
+frequency, a pulse shape is applied, and a biological response $f(x)$ is
+recorded, for instance an evoked muscle activation or a cortical readout. The
+map $x\mapsto f(x)$ is \emph{unknown}, \emph{noisy}, and above all
+\emph{expensive}: every evaluation consumes experimental time on a living
+subject, so the number of stimulations that can be tried is small.
+
+These are exactly the conditions under which Bayesian optimization (BO) is the
+tool of choice. A Gaussian process (GP) surrogate models the response from the
+handful of stimulations tried so far, and an acquisition function decides which
+configuration to try next, balancing exploration of uncertain regions against
+exploitation of promising ones. GP-based BO has already been used successfully
+for neurostimulation in the group and elsewhere; this internship takes the
+method as given and asks a more structural question about \emph{how} it should be
+set up.
+
+\subsection{One phenomenon, several decision problems}
+\label{sec:intro-onephenomenon}
+
+The starting observation is that a single biological phenomenon $f$ is rarely of
+interest for one fixed goal. The very same response surface can be interrogated
+in several ways, depending on the scientific question:
+\begin{itemize}
+  \item \textbf{Target matching:} find a stimulation that produces a
+        \emph{prescribed} response level $T$, i.e.\ solve
+        $\min_x \abs{f(x)-T}$.
+  \item \textbf{Multi-objective optimization:} arbitrate between several
+        competing responses $F(x)=(f_1(x),\dots,f_m(x))$ for example a hand,
+        an elbow and a biceps activation for which there is no single
+        optimum but a trade-off (Pareto) surface.
+  \item \textbf{Constrained optimization:} maximize one response subject to
+        safety or physiological constraints $c(x)\le 0$.
+  \item \textbf{Prior-guided optimization:} exploit prior knowledge that
+        effective stimulations are likely to lie in a particular region of the
+        parameter space.
+\end{itemize}
+The phenomenon $f$ does not change from one task to the next; what changes is the
+\emph{decision problem} built on top of it. This is the thread that runs through
+the whole report.
+
+\subsection{Separation of concerns}
+\label{sec:intro-soc}
+
+Each downstream task can be described by a \emph{task transformation} $\prm$
+applied to the phenomenon. Target matching uses $\prm(z)=-\abs{z-T}$;
+scalarized multi-objective optimization uses a scalarization
+$\prm_\lambda:\R^m\to\R$; prior-guided optimization reweights the search by a
+spatial prior $\pi(x)$. There are then two fundamentally different places where
+this task information can be injected (Figure~\ref{fig:soc-diagram}):
+\begin{description}
+  \item[Separated formulation (\RIGHT).] The GP models the raw phenomenon $f$,
+        and the task transformation $\prm$ enters only the acquisition /
+        decision rule.
+  \item[Task-in-model formulation (\WRONG).] The GP is fitted directly to the
+        transformed quantity $\prm\circ f$, so the task is baked into the object
+        the model must learn.
+\end{description}
+
+\begin{takeaway}
+The phenomenon may stay the same while the scientific task changes. The
+central principle studied in this report is: \emph{model the phenomenon $f$, and
+encode the task in the acquisition whenever possible.}
+\end{takeaway}
+
+The names \RIGHT{} and \WRONG{} are used throughout as convenient labels for the
+two architectures; they should not be read as a blanket claim that non-trivial
+GP means or transformed models are always harmful. As we make precise in
+Section~\ref{sec:contrib-prior}, a genuine \emph{functional} prior over the whole
+response surface can be theoretically beneficial. The claim of this work is
+narrower and structural: task information of the kind that arises in the problems
+above - a target level, a preference weight, a probable optimizer location -
+can generally be moved to the decision level, and doing so preserves assumptions
+that folding it into the model can destroy.
+
+The main research question is therefore:
+\begin{center}
+\emph{When does putting task information into the statistical model change the
+assumptions on which Bayesian optimization relies?}
+\end{center}
+
+\subsection{Research questions}
+\label{sec:intro-questions}
+
+The work is organized around three sub-questions.
+\begin{enumerate}
+  \item \textbf{Task-induced model misspecification.} Does encoding the task in
+        the model take the optimized function outside the function class assumed
+        by the kernel, and if so, how severely?
+  \item \textbf{Preservation of confidence and regret guarantees.} Does the
+        separated formulation retain the confidence bounds and regret guarantees
+        of standard GP-UCB, and through what mechanism?
+  \item \textbf{Generalization beyond target matching.} Does the same
+        separation principle, and the same pushforward-confidence reasoning,
+        extend to multi-objective and prior-guided optimization?
+\end{enumerate}
+
+\subsection{Contributions}
+\label{sec:intro-contributions}
+
+The provenance of every result is made explicit throughout, using the following
+colour code, which also appears next to each theorem statement:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+  \legendchip{colLit}{established literature} & standard, imported without change \\[3pt]
+  \legendchip{colSpec}{literature, specialized here} & a known result re-derived / specialized for our setting \\[3pt]
+  \legendchip{colContrib}{personal contribution} & a personal theoretical contribution \\[3pt]
+  \legendchip{colExp}{personal experiment} & a personal experimental contribution \\[3pt]
+  \legendchip{colSynth}{interpretation / synthesis} & an interpretation or synthesis proposed here \\[3pt]
+  \legendchip{colOpen}{open question} & an open or conjectural statement \\
+\end{tabular}
+\end{center}
+
+\noindent My personal contributions are the following.
+\begin{itemize}
+  \item \textbf{A separation-of-concerns reading of GPBO} that unifies target
+        matching, multi-objective optimization and prior-guided optimization
+        under a single question - where task information should enter -
+        together with a \RIGHT/\WRONG{} taxonomy
+        (Sections~\ref{sec:contrib-tm}--\ref{sec:contrib-prior}).
+        \hfill\legendchip{colSynth}{interpretation / synthesis}
+  \item \textbf{A quantitative approximation barrier} for the target-matching
+        objective $g=\abs{f-T}$: I show that a transverse target crossing
+        creates a cusp, that under smooth-kernel assumptions this places $g$
+        outside the RKHS, and - the stronger statement - that the best
+        approximation of $g$ by an RKHS ball of radius $B$ cannot decay faster
+        than a power of $B$ (Section~\ref{sec:contrib-tm-barrier},
+        Appendix~\ref{app:tm}).
+        \hfill\legendchip{colContrib}{personal contribution}
+  \item \textbf{Positive separation guarantees.} I show that retaining the GP on
+        $f$ and pushing its confidence interval through the task yields a
+        GP-UCB-type regret bound for target matching, and I extend this
+        \emph{pushforward-confidence} argument to Lipschitz scalarizations in the
+        multi-objective setting (Sections~\ref{sec:contrib-tm-pos},
+        \ref{sec:contrib-mo}, Appendices~\ref{app:tm},~\ref{app:mo}).
+        \hfill\legendchip{colContrib}{personal contribution}
+  \item \textbf{A separation-of-concerns treatment of functional priors}, introducing a prior-weighted $\alpha$-UCB acquisition with convergence guarantees, and identifying two failure modes when the prior is embedded in the surrogate: persistent global misspecification despite good local fit, and self-confirming feedback under adaptive sampling. (Section~\ref{sec:contrib-prior},
+        Appendix~\ref{app:prior}).
+        \hfill\legendchip{colContrib}{personal contribution}
+  \item \textbf{A separation-of-concerns interpretation of random-scalarization
+        multi-objective BO,} making explicit why a single vector observation
+        $F(x_t)$ informs all future preferences under a shared objective-wise
+        model, whereas independent scalarized surrogates cannot share this
+        information (Section~\ref{sec:contrib-mo-sharing}).
+        \hfill\legendchip{colSynth}{interpretation / synthesis}
+  \item \textbf{Three controlled experimental studies} (target matching,
+        multi-objective, prior-guided) that operationalize the \RIGHT/\WRONG{}
+        contrast on standard benchmarks with matched budgets, shared seeds and
+        paired tests (Sections~\ref{sec:contrib-tm-exp},
+        \ref{sec:contrib-mo-exp}, \ref{sec:contrib-prior-exp},
+        Appendix~\ref{app:exp}).
+        \hfill\legendchip{colExp}{personal experiment}
+\end{itemize}
+
+\noindent I am careful \emph{not} to overclaim. In particular, the approximation
+barrier is not by itself a lower regret bound for task-in-model GP-UCB, and I do
+not claim that the task-in-model method necessarily fails or does not converge;
+these points are stated as open questions
+(Section~\ref{sec:discussion}).
+
+\subsection{Organization of the report}
+\label{sec:intro-organization}
+
+Section~\ref{sec:background} gives a selective, argumentative state of the art,
+covering only the material needed for the contributions. Section~\ref{sec:contrib-tm}
+develops target matching, from the qualitative regularity obstruction to the
+quantitative barrier and the positive separation guarantee, followed by
+Experiment~A. Section~\ref{sec:contrib-mo} generalizes the principle to
+multi-objective optimization (pushforward confidence, information sharing across
+preferences), followed by Experiment~C. Section~\ref{sec:contrib-prior} treats
+prior-guided optimization (spatial versus functional priors, self-confirmation),
+followed by Experiment~B. Section~\ref{sec:discussion} discusses limitations and
+open problems, and Section~\ref{sec:conclusion} concludes. Appendices~%
+\ref{app:background}--\ref{app:exp} collect the mathematical background, the full
+proofs, and the complete experimental configurations.
+
+% --- SoC diagram --------------------------------------------------------
+\figauto[0.9\linewidth]{figures/Theory/soc_diagram.png}{%
+  \textbf{Separation of concerns.} Left (\RIGHT): the GP models the raw
+  phenomenon $f$; the task transformation $\prm$ acts only at the acquisition
+  level. Right (\WRONG): the transformation $\prm$ is baked into the object the
+  GP must learn, $\prm\circ f$. This contrast reappears in target matching,
+  multi-objective and prior-guided optimization. }{fig:soc-diagram}

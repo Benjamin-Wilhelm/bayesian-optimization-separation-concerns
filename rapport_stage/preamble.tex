@@ -1,0 +1,150 @@
+% ======================================================================
+%  preamble.tex  --  shared preamble for the internship report
+%  Separation of Concerns in Gaussian-Process Bayesian Optimization
+% ======================================================================
+
+% ---- Encoding, fonts, language -----------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage[expansion=false]{microtype}
+
+% ---- Math ---------------------------------------------------------------
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{bm}
+
+% ---- Layout -------------------------------------------------------------
+\usepackage[a4paper,margin=2.6cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{parskip}
+\usepackage{enumitem}
+\setlist{itemsep=2pt,topsep=3pt,parsep=0pt}
+
+% ---- Graphics, colour, tables ------------------------------------------
+\usepackage{placeins}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{caption}
+\usepackage{subcaption}
+\captionsetup{font=small,labelfont=bf}
+
+% ---- Headers ------------------------------------------------------------
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\itshape Separation of Concerns in GP Bayesian Optimization}
+\fancyhead[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ---- Bibliography (natbib + bibtex) ------------------------------------
+\usepackage[numbers,square,sort&compress]{natbib}
+
+% ---- Hyperlinks (load late) --------------------------------------------
+\usepackage[hidelinks]{hyperref}
+\usepackage{cleveref}
+
+% ======================================================================
+%  Colour palette for provenance tags
+% ======================================================================
+\definecolor{colLit}{HTML}{4C6B8A}      % established literature
+\definecolor{colSpec}{HTML}{2E8B8B}     % literature specialized to our setting
+\definecolor{colContrib}{HTML}{B5651D}  % personal theoretical contribution
+\definecolor{colExp}{HTML}{7A5CA5}      % personal experimental contribution
+\definecolor{colSynth}{HTML}{3F7A3F}    % interpretation / synthesis
+\definecolor{colOpen}{HTML}{9A2B2B}     % open question / conjecture
+
+% Inline provenance badge --------------------------------------------------
+\newcommand{\provbadge}[2]{%
+  \hfill\raisebox{0.0ex}{\colorbox{#1!16}{\footnotesize\textcolor{#1!75!black}{\textsf{#2}}}}%
+}
+\newcommand{\Plit}{\provbadge{colLit}{established literature}}
+\newcommand{\Pspec}{\provbadge{colSpec}{literature, specialized here}}
+\newcommand{\Pcontrib}{\provbadge{colContrib}{personal contribution}}
+\newcommand{\Pexp}{\provbadge{colExp}{personal experiment}}
+\newcommand{\Psynth}{\provbadge{colSynth}{interpretation / synthesis}}
+\newcommand{\Popen}{\provbadge{colOpen}{open question}}
+
+% Standalone legend chip (for the introduction legend) --------------------
+\newcommand{\legendchip}[2]{\colorbox{#1!16}{\footnotesize\textcolor{#1!75!black}{\textsf{#2}}}}
+
+% ======================================================================
+%  Theorem environments (numbered within section)
+% ======================================================================
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+\newtheorem*{takeaway}{Takeaway}
+
+% ======================================================================
+%  Figure inclusion with automatic placeholder
+%  \figauto[width]{path}{caption}{label}
+%  If the PNG exists it is included; otherwise a labelled grey box is drawn
+%  so the document always compiles.  Drop the real files into figures/ .
+% ======================================================================
+\newcommand{\figph}[2][\linewidth]{%
+  \IfFileExists{#2}%
+    {\includegraphics[width=#1,height=0.30\textheight,keepaspectratio]{#2}}%
+    {\setlength{\fboxsep}{4pt}%
+     \fbox{\parbox[c][0.24\textheight][c]{0.90\linewidth}{%
+       \centering\ttfamily\footnotesize
+       [\,figure placeholder\,]\\[4pt]\detokenize{#2}}}}%
+}
+
+\newcommand{\figauto}[4][\linewidth]{%
+  \begin{figure}[htbp]
+    \centering
+    \figph[#1]{#2}
+    \caption{#3}
+    \label{#4}
+  \end{figure}}
+
+% ======================================================================
+%  TODO / verification markers
+% ======================================================================
+\usepackage{todonotes}
+\setuptodonotes{inline,size=\footnotesize}
+\newcommand{\TODO}[1]{\todo[color=yellow!45,inline]{\textbf{TODO:} #1}}
+% lightweight inline placeholder (safe inside titlepage / tabular / captions)
+\newcommand{\TODOtext}[1]{{\colorbox{yellow!45}{\footnotesize\textbf{[TODO:} #1\textbf{]}}}}
+\newcommand{\CITEQ}[1]{\textcolor{colOpen}{\textbf{[cite?]}}\marginpar{\footnotesize\textcolor{colOpen}{#1}}}
+
+% ======================================================================
+%  Notation macros
+% ======================================================================
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\X}{\mathcal{X}}
+\newcommand{\Hk}{\mathcal{H}_k}
+\newcommand{\GP}{\mathcal{GP}}
+\newcommand{\inner}[2]{\langle #1, #2\rangle}
+\newcommand{\norm}[1]{\left\lVert #1\right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1\right\rvert}
+\newcommand{\Hnorm}[1]{\norm{#1}_{\Hk}}
+\newcommand{\dist}{\operatorname{dist}}
+\newcommand{\argmax}{\operatorname*{arg\,max}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\DeclareMathOperator{\vol}{vol}
+\DeclareMathOperator{\HV}{HV}
+\newcommand{\Fvec}{\bm{F}}
+\newcommand{\prm}{\rho}                 % task transformation
+\newcommand{\Rregret}{R}
+\newcommand{\gain}{\gamma}
+\newcommand{\rkhs}{\mathcal{H}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\epsinf}{\eps_{\infty}}
+\newcommand{\RIGHT}{\textsc{Right}}
+\newcommand{\WRONG}{\textsc{Wrong}}
+\newcommand{\SoC}{\textsc{SoC}}
