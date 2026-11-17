@@ -1,9 +1,9 @@
-# Experiment C — Pareto-front approximation on ZDT1 (input_dim = 2).
+# Experiment C — Pareto-front approximation on ZDT1 (input_dim = 6).
 # Compares sharing a common posterior over F across preferences (RIGHT
 # Algorithm 1) against solving L independent scalarized problems
 # (RIGHT/WRONG Algorithm 2), at EQUAL global budget.
 experiment_mode: pareto_front
-tag: pf_zdt1_d2
+tag: pf_zdt1_d6
 
 benchmark:
   name: zdt1

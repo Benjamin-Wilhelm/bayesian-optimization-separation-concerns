@@ -3,7 +3,7 @@
 # Algorithm 1) against solving L independent scalarized problems
 # (RIGHT/WRONG Algorithm 2), at EQUAL global budget.
 experiment_mode: pareto_front
-tag: pf_zdt1_d6
+tag: pf_zdt1_d2
 
 benchmark:
   name: zdt1
