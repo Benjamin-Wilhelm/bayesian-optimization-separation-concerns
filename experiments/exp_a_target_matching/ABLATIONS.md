@@ -5,6 +5,25 @@ RIGHT trains on `y_obs`; WRONG trains on `abs(y_obs - target)`. Synthetic
 evaluation uses `f_noiseless` or `abs(f_noiseless - target)` only. Existing
 configurations retain their previous model fitting and acquisition behavior.
 
+The four-arm study applies to **every synthetic benchmark in Experiment A**,
+not only to 1D functions. The checked-in linear configs below are pilot
+examples. Both per-run diagnostics and `compare_ablations.py` support Branin-2D,
+Hartmann-6D, and the other registered synthetic benchmarks. Comparisons are
+within one benchmark at a time; results from different problems are not pooled.
+
+For another benchmark, copy its own YAML into four separately tagged configs.
+Keep target, bounds, initial design, budget, noise, seeds, beta schedule and
+optimizer settings identical across those four configs. Set
+`model.normalize_with_problem_bounds: true`, `paired_method_rng: true`, and
+`generalization.enabled: true` in **all** arms. Cross `model.kernel: matern52`
+and `matern12` with an absent/null `model.fixed_lengthscale` (MLL) or a
+preselected positive scalar/ARD vector (fixed). Select fixed values explicitly
+for that study; the pilot's 0.2 is not a universal setting. Normalization and
+RNG controls define the matched ablation; they do not modify existing configs.
+No new configurations or BO runs are created automatically by plotting.
+
+## Included linear 1D pilot
+
 The files in `configs/ablations/` cross Matérn 5/2 and Matérn 1/2 with
 MLL-optimized and fixed lengthscales. They reuse `linear_1d_short.yaml`'s
 target (0.6), initial design size (1), BO budget (50 additional evaluations),
@@ -48,14 +67,15 @@ Generalization is opt-in through:
 ```yaml
 generalization:
   enabled: true
-  grid: linspace
   n_test: 2048
   seed: 123
 ```
 
-The fixed dense 1D grid includes the domain endpoints and is shared by all
-methods, iterations, seeds and pilot arms. `grid: sobol` is available for
-higher dimensions. Generalization grids are separate from existing calibration
+When `grid` is omitted, the default is `linspace` in 1D and `sobol` in higher
+dimensions. An explicit `grid: linspace` requires a 1D problem. The fixed dense
+1D grid includes the domain endpoints; Sobol uses the benchmark's test-set
+interface and a fixed seed. Each grid is shared by all methods, iterations and
+matched arms. Generalization grids are separate from existing calibration
 grids; their definition is stored with the reports. Processing can also be
 enabled on existing snapshots by explicitly adding this block to a saved run
 config, without repeating BO.
@@ -178,7 +198,8 @@ an approximation-complexity explanation, not proof of its mechanism. BO also
 changes training inputs, noise, mean and amplitude; a small paired pilot
 cannot establish causality, an asymptotic barrier, or theoretical rates.
 
-To overlay processed pilot arms, with identical protocols and initial data:
+To overlay processed arms of any one benchmark, with identical protocols and
+initial data (the included pilot is one example):
 
 ```bash
 python -m experiments.exp_a_target_matching.compare_ablations \
@@ -193,7 +214,7 @@ one row per method. These diagnostics test the proposed mechanism; an
 association between short lengthscales and error along adaptive BO trajectories
 alone does not establish causality, since the sampled inputs also differ.
 It also writes `rkhs_complexity_ablations.png` and `.pdf`, with one row per
-method and panels for lengthscale, fitted-kernel norm, unit-outputscale norm,
+method and panels for all ARD lengthscales, fitted-kernel norm, unit-outputscale norm,
 common target-distance RMSE, and near-target distance RMSE. Curves are means
 over seeds with pointwise bootstrap confidence intervals, resampling whole
 seed trajectories. `plot.py` adds the same diagnostic panels for an individual

@@ -523,18 +523,27 @@ pairing checks, reference grids, tolerances, and figure selection.
 ## 7. Lengthscale and RKHS ablations
 
 Experiment A's [ablation guide](experiments/exp_a_target_matching/ABLATIONS.md)
-describes four pilot arms crossing **Matérn 5/2 vs Matérn 1/2** with
-**MLL-optimized vs fixed lengthscales**, comparing RIGHT and WRONG in each arm.
-They use the linear 1D benchmark, fixed domain normalization, and the same
-initial observations. The fixed lengthscale is 0.2 in normalized input units;
-mean and outputscale remain trainable. `paired_method_rng: true` resets
-the method RNG to the seed. This preserves a common RNG initialization, not
-identical adaptive query points.
+describes a study applicable to **every synthetic Experiment A benchmark**,
+including Branin-2D and Hartmann-6D. For each benchmark separately, cross
+**Matérn 5/2 vs Matérn 1/2** with **MLL-optimized vs fixed lengthscales**,
+comparing RIGHT and WRONG in each of the four arms.
+
+Keep that benchmark's target, bounds, initial design, budget, noise, seeds,
+exploration schedule, and optimizer settings identical across arms. Use fixed
+domain normalization in all four arms. Only the kernel family and lengthscale
+policy differ; mean and outputscale remain trainable. `paired_method_rng: true`
+resets the method RNG to the seed, preserving a common RNG initialization,
+not identical adaptive query points.
+
+The checked-in `linear_1d_*` configs are **pilot examples**, not a restriction
+on the ablation. Their fixed lengthscale of 0.2 in normalized input units is a
+preselected example, not a universal choice for every benchmark. Existing
+benchmark configs are not automatically expanded into four runs.
 
 ### Enable diagnostics for a run
 
-The diagnostics themselves support other synthetic A benchmarks and dimensions.
-Add this block to a run's config before processing:
+Norm/error diagnostics can also be computed for an ordinary run without
+executing the four-arm comparison. Add this block before processing:
 
 ```yaml
 generalization:
@@ -617,13 +626,13 @@ aggregated diagnostics are available:
 | Figure basename, PNG and PDF | Content |
 | --- | --- |
 | `05_gp_generalization` | Lengthscales, native RMSE, mean latent variance |
-| `05_gp_rkhs_complexity` | Lengthscale, fitted/unit-outputscale norms, common global/near-target RMSE |
+| `05_gp_rkhs_complexity` | All ARD lengthscales, fitted/unit-outputscale norms, common global/near-target RMSE |
 
-The RKHS figure currently displays the first lengthscale component; ordinary
-generalization plots include all saved components. Snapshot diagnostics
-describe models **before** the corresponding query.
+Both diagnostic figures retain every saved ARD lengthscale component, with
+dimension labels. Snapshot diagnostics describe models **before** the
+corresponding query.
 
-For comparisons across separately executed pilot configs:
+For comparisons across separately executed arms of the **same benchmark**:
 
 ```bash
 python -m experiments.exp_a_target_matching.compare_ablations \
@@ -632,12 +641,15 @@ python -m experiments.exp_a_target_matching.compare_ablations \
   --output-dir results/exp_a_target_matching/ablation_comparison
 ```
 
-Use configs `linear_1d_matern52_mll.yaml`,
+For the included 1D example, use configs `linear_1d_matern52_mll.yaml`,
 `linear_1d_matern52_fixed.yaml`, `linear_1d_matern12_mll.yaml`, and
 `linear_1d_matern12_fixed.yaml` under `configs/ablations/`.
 The comparison validates matching settings, seed IDs, and initial observations,
 and writes `lengthscale_ablations` and `rkhs_complexity_ablations` in
-PNG/PDF. This cross-run script currently supports **1D only**.
+PNG/PDF. The same command supports higher-dimensional benchmarks: supply
+their four run directories and use a separate output directory per benchmark.
+Changing kernel or lengthscale policy requires new BO trajectories; reprocessing
+a single existing run only adds diagnostics for its already fitted models.
 
 Existing runs with sufficient GP snapshots and training data can be reprocessed
 without rerunning BO. Enable generalization in their saved `config.json`,

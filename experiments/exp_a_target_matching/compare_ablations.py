@@ -7,10 +7,51 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 
 from benchmarks import build_benchmark
 from common.serialization import load_json
+
+_ARD_STYLES = ("-", "--", ":", "-.", (0, (5, 1, 1, 1)), (0, (1, 1, 1, 3)))
+
+
+def _diagnostic_legend(ax, *, lengthscales: bool) -> None:
+    """Separate run colours from dimension styles when ARD would crowd the plot."""
+    if not lengthscales or len(ax.lines) <= 8:
+        ax.legend(fontsize=7)
+        return
+    runs, dimensions = {}, set()
+    for line in ax.lines:
+        label, separator, dimension = line.get_label().rpartition(", dim ")
+        if not separator:
+            ax.legend(fontsize=7)
+            return
+        runs.setdefault(label, line.get_color())
+        dimensions.add(int(dimension))
+    handles = [Line2D([], [], color=color, label=label) for label, color in runs.items()]
+    handles.extend(Line2D([], [], color="0.3", label=f"dim {d}",
+                          ls=_ARD_STYLES[(d-1) % len(_ARD_STYLES)])
+                   for d in sorted(dimensions))
+    ax.legend(handles=handles, fontsize=7, ncol=2)
+
+
+def _plot_diagnostic(ax, data: dict, key: str, label: str, color: str) -> None:
+    """Plot saved bands; retain every ARD dimension rather than averaging them."""
+    keys = (sorted((k for k in data["curves"] if k.startswith("lengthscale_")),
+                   key=lambda k: int(k.rsplit("_", 1)[1]))
+            if key == "lengthscale" else [key])
+    for dimension, metric in enumerate(keys):
+        band = data["curves"].get(metric)
+        if band is None:
+            continue
+        legend = (f"{label}, dim {int(metric.rsplit('_', 1)[1])+1}"
+                  if key == "lengthscale" and len(keys) > 1 else label)
+        ax.plot(data["iteration"], band["center"], label=legend, color=color,
+                ls=_ARD_STYLES[dimension % len(_ARD_STYLES)])
+        if all(v is not None for v in band["lower"] + band["upper"]):
+            ax.fill_between(data["iteration"], band["lower"], band["upper"],
+                            color=color, alpha=.12)
 
 
 def plot_rkhs_diagnostics(series: dict[str, list[tuple[str, dict]]]) -> plt.Figure | None:
@@ -19,7 +60,7 @@ def plot_rkhs_diagnostics(series: dict[str, list[tuple[str, dict]]]) -> plt.Figu
     Each series is a run's seed-mean curve and pointwise bootstrap band.
     No norm values are pooled across kernels or lengthscale policies.
     """
-    keys = ("lengthscale_0", "effective_rkhs_norm", "effective_rkhs_norm_unit_outputscale",
+    keys = ("lengthscale", "effective_rkhs_norm", "effective_rkhs_norm_unit_outputscale",
             "target_distance_rmse", "target_distance_rmse_near_target")
     if not any(data["curves"].get("effective_rkhs_norm") is not None
                for runs in series.values() for _, data in runs):
@@ -28,15 +69,8 @@ def plot_rkhs_diagnostics(series: dict[str, list[tuple[str, dict]]]) -> plt.Figu
     for row, (method, runs) in enumerate(series.items()):
         for index, (label, data) in enumerate(runs):
             for col, key in enumerate(keys):
-                band = data["curves"].get(key)
-                if band is None:
-                    continue
-                ax = axes[row, col]
-                ax.plot(data["iteration"], band["center"], label=label, color=f"C{index % 10}")
-                if all(v is not None for v in band["lower"] + band["upper"]):
-                    ax.fill_between(data["iteration"], band["lower"], band["upper"],
-                                    color=f"C{index % 10}", alpha=.12)
-        for col, title in enumerate(("Lengthscale (input-transform units)",
+                _plot_diagnostic(axes[row, col], data, key, label, f"C{index % 10}")
+        for col, title in enumerate(("Lengthscales (input-transform units)",
                                      "Effective RKHS norm (fitted kernel)",
                                      "Centered raw mean norm\n(unit-outputscale kernel)",
                                      "Common target-distance RMSE",
@@ -45,7 +79,7 @@ def plot_rkhs_diagnostics(series: dict[str, list[tuple[str, dict]]]) -> plt.Figu
             ax.set_title(f"{method}\n{title}", fontsize=10)
             ax.set_xlabel("BO iteration (before query)")
             if ax.lines:
-                ax.legend(fontsize=7)
+                _diagnostic_legend(ax, lengthscales=(col == 0))
             else:
                 ax.text(.5, .5, "Unavailable: reprocess snapshots\nor choose a nonempty near-target subset",
                         transform=ax.transAxes, ha="center", fontsize=8)
@@ -83,8 +117,6 @@ def compare_runs(run_dirs: list[Path], output_dir: Path) -> Path:
         raise ValueError("Ablations must share all settings except kernel and fixed_lengthscale")
     config = configurations[0]
     problem = build_benchmark(config)
-    if problem.dim != 1:
-        raise ValueError("This comparison figure supports 1D ablations only")
     benchmark = problem.name
     initial = None
     for rd in run_dirs:
@@ -98,35 +130,31 @@ def compare_runs(run_dirs: list[Path], output_dir: Path) -> Path:
     methods = config["methods"]
     rkhs_series = {method: [] for method in methods}
     fig, axes = plt.subplots(len(methods), 4, figsize=(18, 4 * len(methods)), squeeze=False)
-    for rd, cfg in zip(run_dirs, configurations):
+    for index, (rd, cfg) in enumerate(zip(run_dirs, configurations)):
         aggregate = rd / "processed" / "aggregate" / benchmark
         diagnostics = load_json(aggregate / "generalization_curves.json")
         model = cfg.get("model", {})
         label = f"{model.get('kernel', 'matern52')}, "
-        label += (f"fixed ℓ={model['fixed_lengthscale']}" if model.get("fixed_lengthscale") is not None
-                  else "MLL ℓ")
+        fixed = model.get("fixed_lengthscale")
+        label += ("fixed ℓ (ARD)" if isinstance(fixed, list) else
+                  f"fixed ℓ={fixed}" if fixed is not None else "MLL ℓ")
         records = [load_json(rd / "processed" / "per_seed" / benchmark /
                              f"seed_{seed:03d}_processed.json") for seed in config["seeds"]]
         for row, method in enumerate(methods):
             data = diagnostics["methods"][method]
             rkhs_series[method].append((label, data))
-            for col, key in enumerate(("lengthscale_0", "rmse", "mean_posterior_variance")):
-                band = data["curves"][key]
-                if band is None:
-                    continue
-                line, = axes[row, col].plot(data["iteration"], band["center"], label=label)
-                if all(v is not None for v in band["lower"] + band["upper"]):
-                    axes[row, col].fill_between(data["iteration"], band["lower"], band["upper"],
-                                                color=line.get_color(), alpha=.12)
+            for col, key in enumerate(("lengthscale", "rmse", "mean_posterior_variance")):
+                _plot_diagnostic(axes[row, col], data, key, label, f"C{index % 10}")
             distances = np.asarray([r["methods"][method]["convergence"]["running_best_target_distance"]
                                     for r in records])
-            axes[row, 3].plot(np.arange(1, distances.shape[1] + 1), distances.mean(0), label=label)
+            axes[row, 3].plot(np.arange(1, distances.shape[1] + 1), distances.mean(0),
+                              label=label, color=f"C{index % 10}")
     for row, method in enumerate(methods):
-        for col, title in enumerate(("Lengthscale (normalized inputs)", "Native-function RMSE",
+        for col, title in enumerate(("Lengthscales (input-transform units)", "Native-function RMSE",
                                      "Mean latent variance", "Best target distance")):
             axes[row, col].set_title(f"{method}\n{title}")
             axes[row, col].set_xlabel("Total evaluations" if col == 3 else "BO iteration (before query)")
-            axes[row, col].legend(fontsize=7)
+            _diagnostic_legend(axes[row, col], lengthscales=(col == 0))
     confidence_pct = 100 * diagnostics["confidence"]
     fig.suptitle(f"Matched ablations — means over seeds; diagnostic bands: {confidence_pct:g}% bootstrap CI")
     fig.tight_layout()
