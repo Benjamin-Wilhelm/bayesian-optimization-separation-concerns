@@ -161,14 +161,15 @@ compatibility work; installing the latest version is not equivalent.
 ```bash
 python3.9 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r Mrequirements.txt \
-  'torch==2.8.0' 'botorch==0.7.0' 'gpytorch==1.13'
+python -m pip install -r Mrequirements.txt
 ```
 
-[Mrequirements.txt](Mrequirements.txt) lists the numerical, plotting,
-configuration, and testing dependencies without version pins. The command
-above pins the GP stack, **not the complete environment**. `scienceplots`
-and seaborn are optional; plotting does not require LaTeX.
+[Mrequirements.txt](Mrequirements.txt) pins the numerical, GP, plotting,
+configuration, and testing dependencies to the validated Python 3.9 environment,
+including the directly imported `linear-operator` package. This is **not a
+complete lock** of transitive dependencies or platform-specific wheels.
+`scienceplots` and seaborn are optional, with tested versions noted in the
+requirements file; plotting does not require LaTeX.
 
 A small Experiment A example uses two seeds, three initial points, and three
 additional BO evaluations per method. It also enables the RKHS diagnostics:
@@ -268,7 +269,7 @@ versions, hardware, and thread settings is not guaranteed.
 | `--max-workers N` | Maximum worker processes; default is CPU count minus two, with a minimum of one |
 | `--results-root PATH` | Alternative output root |
 | `--reuse-existing` | Select the newest run matching the effective tag; see resume differences below |
-| `--schedule all|logbeta|beta8` | C only: filter its default batch; mutually exclusive with `--config` |
+| `--schedule all\|logbeta\|beta8` | C only: filter its default batch; mutually exclusive with `--config` |
 
 An explicit YAML uses its `tag`, falling back to its filename stem. C's
 default batch instead uses explicit mode/dimension/schedule tags, so an
@@ -298,12 +299,63 @@ only with the same scientific settings; config compatibility is not checked
 against the previous saved run. Avoid simultaneous launches with the same tag:
 timestamps have one-second resolution.
 
-The Bash `runA_all_cpu.sh` and `runB_all_cpu.sh` launch embedded config
-lists concurrently, with sequential seeds inside each process. The
-`runA_parallel_seeds.sh`, `runB_parallel_seeds.sh`, and
-`runC_parallel_seeds.sh` wrappers take an optional positional worker count.
-Use the Python entry points for the new `--config` option; the shell wrappers
-do not generally forward arbitrary arguments.
+### Shell launchers (`.sh`)
+
+Run these scripts with **Bash from the repository root**. They select
+`.venv/bin/python` when available, then `.venv/Scripts/python.exe`, then Python
+on `PATH`. They use Bash/Linux utilities such as `nproc` and `find`.
+
+**Parallel seeds.** These wrappers call the Python seed-parallel drivers using
+their default config batches. The optional first positional argument is the
+worker count; without it, they use `nproc - 2`, with a minimum of one.
+
+```bash
+bash scripts/EXPA/runA_parallel_seeds.sh 8
+bash scripts/EXPB/runB_parallel_seeds.sh 8
+bash scripts/EXPC/runC_parallel_seeds.sh 8
+```
+
+Each wrapper forces one BLAS/OMP thread per worker and redirects Python output
+to its experiment's log file:
+
+| Script | Driver | Log file |
+| --- | --- | --- |
+| [runA_parallel_seeds.sh](scripts/EXPA/runA_parallel_seeds.sh) | `scripts.EXPA.run_parallel_seeds` | `logs_cpu_runs/parallel_seeds.out` |
+| [runB_parallel_seeds.sh](scripts/EXPB/runB_parallel_seeds.sh) | `scripts.EXPB.run_parallel_seeds` | `logsB_cpu_runs/parallel_seeds.out` |
+| [runC_parallel_seeds.sh](scripts/EXPC/runC_parallel_seeds.sh) | `scripts.EXPC.run_parallel_seeds` | `logsC_cpu_runs/parallel_seeds.out` |
+
+```bash
+# Follow an ongoing launch in another terminal.
+tail -f logsC_cpu_runs/parallel_seeds.out
+
+# Detached execution of C's default batch, where permitted on the machine.
+nohup bash scripts/EXPC/runC_parallel_seeds.sh 8 > logsC_launcher.out 2>&1 &
+```
+
+These `.sh` wrappers currently accept **only the positional worker count**:
+they do not forward `--config`, `--schedule`, `--reuse-existing`, or
+`--results-root`. Use the Python commands above for those options. The fixed log
+filename is overwritten on each launch; save it separately if needed.
+
+**Parallel configurations.** The `all_cpu.sh` scripts start independent
+sequential runners concurrently, rather than distributing individual seeds.
+Their config lists and concurrency limits are embedded in the shell files.
+
+| Script | Current selection and status |
+| --- | --- |
+| [runA_all_cpu.sh](scripts/EXPA/runA_all_cpu.sh) | Hartmann-6 from `ADAPTATIVE_MATERN_BETA/`; one log per config in `logs_cpu_runs/` |
+| [runB_all_cpu.sh](scripts/EXPB/runB_all_cpu.sh) | Eight good/bad-prior configs from `ADAPTATIVE_LOG_BETA/`; one log per config in `logsB_cpu_runs/` |
+| [runC_all_cpu.sh](scripts/EXPC/runC_all_cpu.sh) | Legacy batch; its fixed-mode config paths are missing. Use the seed-parallel Python driver or its shell wrapper instead. |
+| [run_test.sh](scripts/EXPB/run_test.sh) | B's three double-well prior-center configs in `TEST_PRIOR_CENTER/`; this generates experimental data, despite its name. |
+
+```bash
+# These launch the scientific batches selected inside each script.
+bash scripts/EXPA/runA_all_cpu.sh
+bash scripts/EXPB/runB_all_cpu.sh
+```
+
+For processing and plotting existing runs with `.sh` scripts, see
+[Shell postprocessing shortcuts](#shell-postprocessing-shortcuts).
 
 ### SLURM
 
@@ -640,6 +692,45 @@ pointwise/uniform band options; B also accepts `--baseline`.
 C accepts repeatable `--run-dir` for an Algorithm-2 subrun-count overlay;
 its main summaries use the first run. Use compatible runs differing in subrun
 count, not unrelated benchmark configurations.
+
+### Shell postprocessing shortcuts
+
+The `last_runs.sh` scripts automate later pipeline stages; they **do not
+generate new BO trajectories**. The optional positional argument selects how
+many of the most recently modified **matching** run directories to process.
+It must be a positive integer. A/B default to one run; C defaults to eight.
+
+| Experiment | Script | Stages executed |
+| --- | --- | --- |
+| A | [processA_last_runs.sh](scripts/EXPA/processA_last_runs.sh) | `process` then `analyze` |
+| A | [plotA_last_runs.sh](scripts/EXPA/plotA_last_runs.sh) | `plot` |
+| B | [processB_last_runs.sh](scripts/EXPB/processB_last_runs.sh) | `process` then `analyze` |
+| B | [plotB_last_runs.sh](scripts/EXPB/plotB_last_runs.sh) | `plot` |
+| C | [processC_last_runs.sh](scripts/EXPC/processC_last_runs.sh) | `process` only |
+| C | [plotC_last_runs.sh](scripts/EXPC/plotC_last_runs.sh) | `analyze`, including figures |
+
+```bash
+# A: process/analyze, then plot the latest matching run.
+bash scripts/EXPA/processA_last_runs.sh 1
+bash scripts/EXPA/plotA_last_runs.sh 1
+
+# B: process/analyze, then plot the latest matching run.
+bash scripts/EXPB/processB_last_runs.sh 1
+bash scripts/EXPB/plotB_last_runs.sh 1
+
+# C: process, then analyze/plot the latest eight matching runs.
+bash scripts/EXPC/processC_last_runs.sh 8
+bash scripts/EXPC/plotC_last_runs.sh 8
+```
+
+Selection uses hardcoded tag patterns under `results/<experiment>/runs/`.
+It is not an unrestricted selection of the last runs: custom tags, A's
+ablation tags, and C's `_logbeta`/`_beta8` suffixes may not match. In particular,
+the current C wrappers do not select the schedule-suffixed runs produced by
+its default Python batch. The examples above apply to matching tags; use the
+explicit Python `--run-dir` commands for a specific run or another results
+root. These shortcuts do not forward diagnostic options such as
+`--rkhs-only` or `--refresh-selection`.
 
 ### Output layout
 
