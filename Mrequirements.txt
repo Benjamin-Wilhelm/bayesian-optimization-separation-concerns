@@ -1,0 +1,31 @@
+# Tested with Python 3.9.25. Direct dependencies are pinned to the validated
+# environment; this is not a complete lock of transitive/platform dependencies.
+# Install with: python -m pip install -r Mrequirements.txt
+
+# Core numerical stack
+numpy==2.0.2
+scipy==1.13.1
+pandas==2.3.3
+
+# Bayesian optimization / Gaussian processes (legacy FixedNoiseGP API)
+torch==2.8.0
+gpytorch==1.13
+botorch==0.7.0
+linear-operator==0.5.3
+
+# Configuration
+PyYAML==6.0.3
+
+# Plotting
+matplotlib==3.9.4
+
+# Optional plotting styles (fallbacks work without these):
+# scienceplots==2.2.2
+# seaborn==0.13.2
+
+# Statistics / utilities
+scikit-learn==1.6.1
+tqdm==4.67.3
+
+# Testing
+pytest==8.4.2

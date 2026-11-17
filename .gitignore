@@ -238,5 +238,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-Mrequirements.txt
 CLAUDE.md
