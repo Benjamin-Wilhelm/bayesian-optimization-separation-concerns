@@ -1,394 +1,752 @@
 # Bayesian Optimization — Separation of Concerns
 
-This repository investigates **Separation of Concerns (SoC)** in Gaussian-process
-Bayesian optimization: learn the underlying objective from observations, then
-express targets, domain preferences, or multi-objective trade-offs in the
-acquisition. Moving those concerns into the GP can change the modeled function
-and its smoothness or prior assumptions.
+## 1. Overview and scientific motivation
 
-Three experiments compare SoC-aligned **RIGHT** methods with **WRONG** alternatives:
-**A — Target Matching**, **B — Prior-Guided BO**, and **C — Multi-Objective BO**.
-These are experimental labels; performance and calibration are evaluated across seeds.
+This repository studies **Separation of Concerns (SoC)** in Gaussian-process
+Bayesian optimization (BO): learn the unknown phenomenon from observations,
+and express targets, domain preferences, and multi-objective trade-offs in the
+acquisition function.
 
-## Setup
+Putting a decision preference into the training labels or GP mean can change
+the modeled function, its smoothness, or its prior assumptions. The experiments
+investigate the consequences for optimization and probabilistic calibration.
+**RIGHT** and **WRONG** name the experimental conditions; they do not assert
+that one method always wins or that a preference-informed model is inherently
+invalid.
 
-Run commands from the directory containing this README,
-`bayesian-optimization-separation-concerns/`. The inspected Linux environment uses
-Python **3.9.25**, PyTorch **2.8.0**, BoTorch **0.7.0**, and GPyTorch **1.13**.
-The code requires the legacy `FixedNoiseGP` API and relies on BoTorch 0.7's default kernel.
+Three experiments share GP utilities, seed-level logging, and postprocessing:
+
+| Experiment | Question | Implementation |
+| --- | --- | --- |
+| A — Target Matching | Where should a target value enter BO? | [exp_a_target_matching](experiments/exp_a_target_matching/) |
+| B — Prior-Guided BO | Should a spatial preference shape the acquisition or the GP mean? | [exp_b_prior_guided](experiments/exp_b_prior_guided/) |
+| C — Multi-Objective BO | Where should objective preferences enter, and when does sharing observations help? | [exp_c_multiobjective](experiments/exp_c_multiobjective/) |
+
+The current runners use analytic synthetic benchmarks. They distinguish noisy
+observations used by BO from noiseless values used only for evaluation.
+
+## 2. Three experiments
+
+### A — Target matching
+
+Given a target $T$, minimize $g(x)=\lvert f(x)-T\rvert$ using noisy observations
+$y_{\mathrm{obs}}=f(x)+\epsilon$.
+
+**RIGHT** fits a GP to raw observations. **WRONG** fits a GP to their absolute
+target distances. Both acquisitions are maximized:
+
+$$
+\begin{aligned}
+a_R(x) &= -\lvert\mu_f(x)-T\rvert
+          +\sqrt{\beta_t}\,\sigma_f(x),\\
+a_W(x) &= -\mu_g(x)+\sqrt{\beta_t}\,\sigma_g(x).
+\end{aligned}
+$$
+
+The implemented method names are `right_target_matching_ucb` and
+`wrong_gp_on_abs_lcb`. A target crossing can introduce a kink into the
+transformed function even when the underlying objective is smooth.
+
+### B — Prior-guided BO
+
+Objectives are oriented to **maximization**, with a sign flip where required
+and no rescaling of their natural output range. A Gaussian spatial preference
+is evaluated in native input coordinates:
+
+$$
+\pi(x)=\exp\!\left[
+-\frac{1}{2}\sum_{j=1}^{d}
+\left(\frac{x_j-c_j}{\ell_j}\right)^2
+\right].
+$$
+
+**RIGHT**, `alpha_pi_ucb`, keeps a generic GP and weights its exploration bonus:
+
+$$
+a_R(x)=\mu_f(x)+
+\left(1+\frac{\alpha}{1-\alpha}\pi(x)\right)
+\sqrt{\beta_t}\,\sigma_f(x),
+\qquad 0\leq\alpha<1.
+$$
+
+The vanilla baseline uses ordinary UCB. The raw prior-in-mean **WRONG**
+conditions use ordinary UCB with a GP whose mean is
+
+$$
+m(x)=\lambda f_{\mathrm{prior}}(x),
+\qquad
+f_{\mathrm{prior}}(x)=f_{\mathrm{lower}}
+ +(f_{\mathrm{upper}}-f_{\mathrm{lower}})\pi(x).
+$$
+
+Here the output bounds belong to the oriented benchmark. The coefficient
+$\lambda$ is fixed or learned by marginal likelihood. The posterior models
+the objective directly; training labels are not residuals.
+
+| Method | Condition |
+| --- | --- |
+| `vanilla_ucb` | Generic GP, ordinary UCB |
+| `alpha_pi_ucb` | Generic GP, preference in the acquisition |
+| `lambda_pi_fixed_ucb` | Raw-scale prior mean, fixed coefficient |
+| `lambda_pi_adaptive_ucb` | Raw-scale prior mean, learned coefficient |
+| `lambda_pi_fixed_standardized_ucb` | Standardized prior-mean variant, fixed coefficient |
+| `lambda_pi_adaptive_standardized_ucb` | Standardized prior-mean variant, learned coefficient |
+
+The standardized variants z-score $\pi$ in model coordinates instead of using
+the raw-scale mean above. They standardize observations; raw prior-mean
+variants disable output standardization.
+
+### C — Multi-objective BO
+
+The original ZDT objectives are minimized. The implementation uses their
+sign-flipped maximization view $F=-f_{\mathrm{raw}}$.
+
+**RIGHT** fits an independent GP to each noisy oriented objective.
+**WRONG** fits a scalar GP to scalarized noisy observations, with a preference
+$\lambda$ fixed within that GP. Their maximized acquisitions are
+
+$$
+\begin{aligned}
+A_{j,t}(x)&=\mu_{j,t}(x)+\sqrt{\beta_t}\,\sigma_{j,t}(x),\\
+a_R(x;\lambda)&=\rho_\lambda\!\left(
+ A_{1,t}(x),\ldots,A_{m,t}(x)\right),\\
+a_W(x;\lambda)&=\mu_{g_\lambda,t}(x)
+ +\sqrt{\beta_t}\,\sigma_{g_\lambda,t}(x).
+\end{aligned}
+$$
+
+Two monotone scalarizations are implemented:
+
+$$
+\rho_\lambda^{\mathrm{lin}}(y)=\sum_{j=1}^{m}\lambda_j y_j,
+\qquad
+\rho_\lambda^{\mathrm{HV}}(y)=
+\left[
+\min_j\frac{\max(0,y_j-z_j)}{\lambda_j}
+\right]^m.
+$$
+
+The hypervolume reference point is fixed at $z=(-1.1,-1.1)$ in maximization
+coordinates. Weights are clamped away from zero only for numerical safety.
+
+**Fixed preference** isolates the scalarization location. **Pareto front**
+compares three methods at equal global evaluation budget:
+
+| Method | Observation sharing |
+| --- | --- |
+| `right_algorithm_1` | One shared set of objective GPs; a new preference at each BO step |
+| `right_algorithm_2` | Independent RIGHT subruns, each with a fixed preference |
+| `wrong_algorithm_2` | Independent WRONG subruns using the same preferences and initial data as RIGHT Algorithm 2 |
+
+WRONG is coherent for a fixed preference. Combining labels from changing
+preferences in a scalar GP without a preference input would model a different
+problem; that method is not implemented.
+
+## 3. Installation and Quick Start
+
+Run commands from the repository root. The inspected environment uses:
+
+| Component | Version |
+| --- | --- |
+| Python | 3.9.25 |
+| PyTorch | 2.8.0 |
+| BoTorch | 0.7.0 |
+| GPyTorch | 1.13 |
+| NumPy / SciPy | 2.0.2 / 1.13.1 |
+| Matplotlib / PyYAML | 3.9.4 / 6.0.3 |
+
+The code uses the legacy `FixedNoiseGP` API. Updating BoTorch requires
+compatibility work; installing the latest version is not equivalent.
 
 ```bash
 python3.9 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r Mrequirements.txt 'torch==2.8.0' 'botorch==0.7.0' 'gpytorch==1.13'
+python -m pip install -r Mrequirements.txt \
+  'torch==2.8.0' 'botorch==0.7.0' 'gpytorch==1.13'
 ```
 
-**`Mrequirements.txt`** lists NumPy, SciPy, pandas, PyTorch, GPyTorch, BoTorch,
-PyYAML, Matplotlib, scikit-learn, tqdm and pytest without pins; the versions above
-are not a full lock. `scienceplots`/seaborn are optional; figures do not require LaTeX.
+[Mrequirements.txt](Mrequirements.txt) lists the numerical, plotting,
+configuration, and testing dependencies without version pins. The command
+above pins the GP stack, **not the complete environment**. `scienceplots`
+and seaborn are optional; plotting does not require LaTeX.
 
-Examples use CPU. A/B expose `--device cpu|cuda|auto`; C accepts the option but
-builds CPU tensors without applying it. Shell launchers use Bash/Linux; SLURM is optional.
+A small Experiment A example uses two seeds, three initial points, and three
+additional BO evaluations per method. It also enables the RKHS diagnostics:
 
-## Repository map
+```bash
+python -m experiments.exp_a_target_matching.run \
+  --config experiments/exp_a_target_matching/configs/ablations/smoke_lengthscale.yaml \
+  --device cpu
+
+# Set this to the run directory printed by run.py.
+RUN_DIR='results/exp_a_target_matching/runs/<generated_run_id>'
+python -m experiments.exp_a_target_matching.process --run-dir "$RUN_DIR"
+python -m experiments.exp_a_target_matching.analyze --run-dir "$RUN_DIR"
+python -m experiments.exp_a_target_matching.plot --run-dir "$RUN_DIR"
+```
+
+The smoke configuration is a technical check, not evidence for a scientific
+conclusion. Seeds and budgets are selected in YAML.
+
+## 4. Repository structure
 
 ```text
-common/                         GP/design/acquisition utilities, priors, metrics, diagnostics, statistics, logging
-benchmarks/                     Scalar problems, maximization wrapper, two-objective ZDT benchmarks
-acquisitions/                   Target matching, prior-guided UCB, scalarized UCB
-data/                           Raw and processed JSON schemas for A, B, C
+common/                       GP builders, designs, metrics, diagnostics, statistics, logging
+benchmarks/                   Scalar synthetic functions, orientation wrapper, ZDT problems
+acquisitions/                 Target matching, prior-guided UCB, scalarized UCB
+data/                         Raw and processed result schemas
 experiments/
-  exp_a_target_matching/        run.py → process.py → analyze.py → plot.py
-  exp_b_prior_guided/           run.py → process.py → analyze.py → plot.py
-  exp_c_multiobjective/         run.py → process.py → analyze.py (includes figures)
-    configs/                   fixed_scalarization/{LOG_BETA,beta=8}/, pareto_front/ (also beta=8/)
-scripts/EXPA/, EXPB/, EXPC/      CPU batch/seed launchers and postprocessing wrappers
-scripts/smoke_test_exp_*_workflow.py  End-to-end checks that create experimental data
-tests/                          Scientific and implementation checks
-results/<experiment>/runs/     Saved executions, derived data, figures, logs
+  exp_a_target_matching/      run → process → analyze → plot; configs and ablation comparison
+  exp_b_prior_guided/         run → process → analyze → plot; prior configurations
+  exp_c_multiobjective/       run → process → analyze (also generates figures)
+scripts/
+  EXPA/, EXPB/, EXPC/         CPU launchers and postprocessing wrappers
+  launcher_utils.py          Shared YAML loading for seed-parallel launchers
+hpc/                          Scaffold; the current SLURM launcher is under scripts/EXPC/
+tests/                        Scientific invariants, diagnostics, and CLI regression tests
+results/<experiment>/runs/    Independent config executions, paired seeds, derived outputs
 ```
 
-Each experiment has YAML `configs/`; `hpc/` is a scaffold. SLURM lives under `scripts/EXPC/`.
+Models remain generic. Decision-specific formulas belong in acquisitions;
+runners generate raw results, processors compute metrics, and plotting reads
+saved results. The experiment is the scientific unit, a config execution is a
+run, and a seed contains one trajectory for every compared method.
 
-## Shared modeling and reproducibility conventions
+## 5. Running experiments
 
-- Observations are noisy; synthetic ground truth is reserved for evaluation.
-  A/B store `y_obs` and `f_noiseless`; C stores noisy `model_y` separately from
-  noiseless `raw_y` and `oriented_y`.
-- All experiments use `torch.double`, scrambled Sobol initial designs, and sequential
-  BO (`q=1`). Hyperparameters are fitted afresh at each step by exact marginal
-  log-likelihood. The default kernel is scaled Matérn 5/2 with ARD in BoTorch 0.7;
-  `model.kernel` also supports `matern32`, `matern12`, and `rbf` (`common/models.py`).
-- **Input normalization** acts inside the GP. A/C use `Normalize(d=...)` with
-  bounds learned from the training inputs; B supplies fixed problem bounds.
-  Designs and acquisition searches still use the native domain bounds.
-- **Output standardization** uses `Standardize` on current training targets;
-  posterior outputs return to the target scale. It is separate from absolute-value
-  transforms, orientation flips, and scalarization. Policies differ below.
-- GP `noise_std=s` becomes a constant **variance** tensor `train_Yvar = s²` in
-  `FixedNoiseGP`; BoTorch also standardizes that variance when standardizing outputs.
-  `noise_std=None` selects inferred-noise `SingleTaskGP`. GPyTorch may clamp tiny
-  fixed variances for numerical stability.
-- Acquisition optimization uses BoTorch `optimize_acqf`; `num_restarts` and
-  `raw_samples` control multistart initialization. `BetaSchedule` supports constant,
-  logarithmic $\beta_t=\beta_0+c\log(t+1)$, and `matern_gamma` schedules.
-  A/B put these settings at the YAML root; C nests them under `acquisition`.
-- All `run.py` entry points accept `--config`, `--tag`, `--results-root`, and
-  `--device`. Seeds are selected in YAML, not by a run-time `--seed` option.
-  A/B use seed lists; C uses inclusive `{start, end}` ranges.
+### Sequential execution of one YAML
 
-## Experiment A — Target Matching
-
-### Principle
-
-Minimize $|f(x)-T|$ using observations $y=f(x)+\epsilon$. RIGHT fits a GP on
-`y_obs`; WRONG fits a GP on `abs(y_obs - target)`. BoTorch maximizes both scores:
-
-$$
-a_R(x)=-|\mu_f(x)-T|+\sqrt{\beta_t}\,\sigma_f(x),\qquad
-a_W(x)=-\mu_g(x)+\sqrt{\beta_t}\,\sigma_g(x).
-$$
-
-The target enters RIGHT only at acquisition time. WRONG absorbs it into the
-training labels, potentially introducing kinks where the objective crosses $T$.
-
-### Code organization and workflow
-
-| Program | Inputs and main dependencies | Outputs |
-| --- | --- | --- |
-| `run.py` | YAML; `benchmarks`, shared GP builder, `acquisitions/target_matching.py` | Paired raw seed JSON: initial design, raw observations, BO trajectories, full fitted GP snapshots |
-| `process.py` | Run `config.json` and raw JSON; saved states, shared metrics/diagnostics | Per-seed metrics, convergence curves, held-out calibration and optional predictions; reconstructs GPs without MLL fitting |
-| `analyze.py` | Processed seeds and saved config; `common/statistics.py` | Across-seed performance/calibration summaries, bootstrap curves, statistical tests |
-| `plot.py` | Saved config, processed/aggregate data, raw trajectories/snapshots and benchmark geometry | PNG/PDF figures under `figures/<benchmark>/` |
-
-### Experimental protocol
-
-Configured problems include linear, exponential, sine-trend, Forrester,
-Gaussian-trap variants and damped oscillatory trap in 1D, Branin in 2D, and
-Hartmann in 6D. Configurations may override the native bounds.
-Representative **base configs** (outside kernel/schedule subdirectories):
-
-| Config | Initial points + BO evaluations | Seeds | Target; exploration | Restarts / raw samples |
-| --- | --- | --- | --- | --- |
-| `branin_2d_short.yaml` | 4 + 50 | 1–100 | $T=5$; $\beta=2$ | 25 / 2048 |
-| `hartmann_6d_full.yaml` | 12 + 50 | 1–100 | $T=-2.5$; $\beta=8$ | 30 / 4096 |
-| `gaussian_trap_1d_short.yaml` | 1 + 50 | 1–100 | $T=0.38$; $\beta=2$ | 20 / 1024 |
-
-Here `budget` counts **additional BO evaluations**; total cost is
-`initial_design_size + budget`. Methods share initial inputs and observations.
-The base scientific configs above are noiseless; `noise_std` controls Gaussian
-observation noise. For nested benchmark configs, it belongs inside `benchmark`.
-Both methods currently use fixed noise equal to the benchmark noise, as noise is currently set to 0; To further study, the effect of noise, one could try to infer noise variance for the wrong model, as the transformation of the objective folds the noise, leading to another source of misspecification. Reusing a fixed variance after the
-absolute-value transform is a modeling approximation for noisy WRONG runs (except when it is set to 0 obviously.
-
-Input normalization and output standardization are enabled for both methods by
-the builder defaults. `model.kernel` selects the kernel; the runner does not
-forward YAML normalization/standardization flags. `RBF/`, `MATERN_1_2/`,
-`ADAPTATIVE_LOG_BETA/`, and `ADAPTATIVE_MATERN_BETA/` provide alternative configs
-whose budgets and schedules can differ from the base configs.
-
-The main metric is target simple regret $\min_{s\le n}|f(x_s)-T|-d^{*}$, with
-$d^{*}=\min_x|f(x)-T|$ from the benchmark oracle, or zero if unavailable. Secondary
-metrics include cumulative regret, AUC, hitting time and failure rate. Deterministic
-global/near-target grids support NLPD, coverage, PIT, residuals, bound violations
-and optional joint diagnostics. RIGHT's modeled quantity is $f$; WRONG's is
-$|f-T|$; additional decision diagnostics compare target distances. Calibration
-replays saved **pre-query** models, including the last snapshot, without a final refit.
-
-### Commands and reproducibility
+The three entry points accept `--config`, `--tag`, `--results-root`,
+and `--device`. These commands generate raw data only:
 
 ```bash
 python -m experiments.exp_a_target_matching.run \
   --config experiments/exp_a_target_matching/configs/branin_2d_short.yaml --device cpu
-# Replace <RUN_DIR> with the newly created results/exp_a_target_matching/runs/... path.
-RUN_DIR='<RUN_DIR>'
+
+python -m experiments.exp_b_prior_guided.run \
+  --config experiments/exp_b_prior_guided/configs/branin_2d_good_prior.yaml --device cpu
+
+python -m experiments.exp_c_multiobjective.run \
+  --config experiments/exp_c_multiobjective/configs/pareto_front/zdt1_d2.yaml --device cpu
+```
+
+Those are scientific configurations and can be expensive. For technical checks,
+use A's Quick Start, B's `configs/smoke_forrester.yaml`, or C's
+`configs/pareto_front/smoke_zdt1_d2.yaml`. A/B support CPU, CUDA, and automatic
+device selection. C currently constructs CPU tensors even when another device
+is requested; use CPU for C.
+
+### Parallel execution across seeds
+
+The Python launchers use the same per-seed routines as the sequential runners.
+`--config PATH` selects **one** YAML without editing launcher source.
+Relative paths are resolved from the current directory; absolute paths and
+`.yaml`/`.yml` files are accepted.
+
+```bash
+python -m scripts.EXPA.run_parallel_seeds \
+  --config experiments/exp_a_target_matching/configs/branin_2d_short.yaml \
+  --max-workers 8
+
+python -m scripts.EXPB.run_parallel_seeds \
+  --config experiments/exp_b_prior_guided/configs/branin_2d_good_prior.yaml \
+  --max-workers 8
+
+python -m scripts.EXPC.run_parallel_seeds \
+  --config experiments/exp_c_multiobjective/configs/pareto_front/zdt1_d2.yaml \
+  --max-workers 8
+```
+
+Workers run on CPU; math-library thread counts default to one unless already
+set in the environment. Seed pairing, RNG policy, GP fitting, and raw schemas
+are inherited from the experiment runners. Bitwise identity across dependency
+versions, hardware, and thread settings is not guaranteed.
+
+| Option | Meaning |
+| --- | --- |
+| `--config PATH` | Run one YAML instead of the default batch |
+| `--max-workers N` | Maximum worker processes; default is CPU count minus two, with a minimum of one |
+| `--results-root PATH` | Alternative output root |
+| `--reuse-existing` | Select the newest run matching the effective tag; see resume differences below |
+| `--schedule all|logbeta|beta8` | C only: filter its default batch; mutually exclusive with `--config` |
+
+An explicit YAML uses its `tag`, falling back to its filename stem. C's
+default batch instead uses explicit mode/dimension/schedule tags, so an
+explicit-config invocation may have a different tag from the corresponding
+batch job.
+
+### Batch execution and resume behavior
+
+Omitting `--config` preserves the existing selections:
+
+| Driver | Default batch |
+| --- | --- |
+| A | Hartmann-6 from `configs/ADAPTATIVE_MATERN_BETA/` |
+| B | Eight good/bad-prior configs from `configs/ADAPTATIVE_LOG_BETA/` |
+| C | Sixteen fixed/Pareto configs across log-beta and constant-beta schedules |
+
+```bash
+python -m scripts.EXPA.run_parallel_seeds --max-workers 8
+python -m scripts.EXPB.run_parallel_seeds --max-workers 8
+python -m scripts.EXPC.run_parallel_seeds --schedule logbeta --max-workers 8
+```
+
+Ordinary launches use timestamped run directories. With `--reuse-existing`,
+**C skips completed seed files; A/B recompute all selected seeds and can
+overwrite their raw JSON**. All three save config and metadata again. Resume
+only with the same scientific settings; config compatibility is not checked
+against the previous saved run. Avoid simultaneous launches with the same tag:
+timestamps have one-second resolution.
+
+The Bash `runA_all_cpu.sh` and `runB_all_cpu.sh` launch embedded config
+lists concurrently, with sequential seeds inside each process. The
+`runA_parallel_seeds.sh`, `runB_parallel_seeds.sh`, and
+`runC_parallel_seeds.sh` wrappers take an optional positional worker count.
+Use the Python entry points for the new `--config` option; the shell wrappers
+do not generally forward arbitrary arguments.
+
+### SLURM
+
+C has an existing [SLURM launcher](scripts/EXPC/runC_parallel_seeds.sbatch)
+that forwards arguments to its Python driver and uses the allocated CPU count:
+
+```bash
+mkdir -p logsC_cpu_runs
+sbatch --partition=YOUR_PARTITION --cpus-per-task=8 \
+  scripts/EXPC/runC_parallel_seeds.sbatch \
+  --config experiments/exp_c_multiobjective/configs/pareto_front/zdt1_d2.yaml
+```
+
+Submit from the repository root with the Python environment available on the
+compute node. Adjust partition, memory, and time limits for the cluster.
+The supplied defaults are site-specific. A/B have no dedicated SLURM scripts.
+
+## 6. Experiment-specific protocols
+
+### Shared modeling and evaluation conventions
+
+BO uses noisy observations; synthetic evaluation uses noiseless benchmark
+values. A/B distinguish `y_obs` from `f_noiseless`. C distinguishes
+noisy `model_y` from noiseless minimization `raw_y` and maximization
+`oriented_y`. Methods never train on held-out noiseless diagnostic values.
+
+The runners use double precision, scrambled Sobol initial designs, and
+sequential acquisitions with one candidate per step. GP hyperparameters are
+fitted by exact marginal log-likelihood at each step. The supported kernels are
+`matern52` (default), `matern32`, `matern12`, and `rbf`.
+With BoTorch 0.7, the default is a scaled Matérn 5/2 kernel with ARD.
+
+Input normalization and output standardization are internal GP transforms;
+they are separate from objective orientation or scalarization. A/C normally
+learn normalization bounds from training inputs; B uses fixed domain bounds.
+A's ablations can use fixed domain bounds via
+`model.normalize_with_problem_bounds: true`.
+
+Known noise standard deviation $s$ becomes a variance $s^2$ in
+`FixedNoiseGP`; GPyTorch can impose a numerical floor. Output
+standardization also transforms that variance. Reusing this noise model after
+absolute-value or nonlinear scalarization is an approximation to transformed
+noise, especially near a kink or truncation.
+
+Acquisition optimization uses multistart `optimize_acqf`.
+`num_restarts` and `raw_samples` control initialization. Exploration
+schedules include constant, logarithmic, and `matern_gamma` policies. The
+logarithmic convention is $\beta_t=\beta_0+c\log(t+1)$.
+
+### A — Benchmarks, budget, and metrics
+
+Available problems include linear, exponential, sine-trend, Forrester,
+Gaussian-trap variants, and damped oscillatory trap in 1D, Branin in 2D,
+and Hartmann in 6D. Representative base configs are:
+
+| Config under `experiments/exp_a_target_matching/configs/` | Initial + additional BO evaluations | Seeds |
+| --- | --- | --- |
+| `branin_2d_short.yaml` | 4 + 50 | 1–100 |
+| `hartmann_6d_full.yaml` | 12 + 50 | 1–100 |
+| `gaussian_trap_1d_short.yaml` | 1 + 50 | 1–100 |
+
+A/B's `budget` counts **additional BO evaluations**. Methods share initial
+inputs and noisy observations within each seed. A's two methods both use fixed
+benchmark noise. Most base scientific configurations use zero observation
+noise, subject to the GP's numerical noise floor. A's runner enables GP input
+normalization and output standardization by builder defaults; general YAML
+flags for disabling these are not forwarded.
+
+Define $d^\star=\min_x\lvert f(x)-T\rvert$. The main synthetic metric is
+
+$$
+R_n^{\mathrm{target}}=
+\min_{1\leq s\leq n}\lvert f_{\mathrm{noiseless}}(x_s)-T\rvert-d^\star.
+$$
+
+Cumulative target regret sums the **instantaneous** target distances minus
+$d^\star$, not best-so-far regrets. Secondary summaries include AUC, hitting
+time, and failure rate. Processing uses the benchmark's target-distance oracle
+when available, otherwise zero as the reference; the latter is justified only
+when the target is attainable.
+
+Calibration uses held-out global and near-target grids. RIGHT is evaluated
+against the raw function; WRONG's native calibration concerns its transformed
+function. Common target-distance diagnostics are described in Section 7.
+
+### B — Priors, budget, and metrics
+
+Good/bad-prior configs cover Forrester and double Gaussian well in 1D, Branin
+in 2D, and Hartmann in 3D/6D. Base scientific configurations use seeds 1–50,
+zero observation noise, and these initial/additional BO counts: 1/50 in 1D,
+4/50 for Branin, 6/60 for Hartmann-3, and 12/80 for Hartmann-6.
+The YAML method list controls which comparisons run.
+
+For an oriented maximization objective, evaluation uses
+
+$$
+r_t=f^\star-f_{\mathrm{noiseless}}(x_t),
+\qquad
+R_n^{\mathrm{simple}}=\min_{t\leq n}r_t,
+\qquad
+R_n^{\mathrm{cumulative}}=\sum_{t=1}^{n}r_t.
+$$
+
+Calibration is measured globally and in the masked prior region where
+$\pi(x)$ exceeds `calibration.prior_region_threshold`.
+`model.use_fixed_noise` selects fixed or inferred noise. Raw prior-mean
+methods disable output standardization; standardized variants enable it and
+z-score the prior over training inputs, with a deterministic fallback grid.
+The raw prior mean uses known synthetic output-range information, which must
+be supplied or estimated independently for a real application.
+
+### C — Preferences, budget, and metrics
+
+ZDT1 and ZDT2 each have two objectives, with input dimension 2 or 6 on
+$[0,1]^d$. ZDT1 has a convex front; the interior of ZDT2's concave front is
+unsupported by positive linear scalarizations. Failure to select that interior
+with a weighted sum is a scalarization limitation.
+
+| Mode | Config location | Standard total budget per method |
+| --- | --- | --- |
+| Fixed, log beta | `configs/fixed_scalarization/LOG_BETA/` | 50 in 2D, 200 in 6D, **per scalarization/angle case** |
+| Fixed, constant beta | `configs/fixed_scalarization/beta=8/` | Same budget convention |
+| Pareto, log beta | `configs/pareto_front/` | 500 |
+| Pareto, constant beta | `configs/pareto_front/beta=8/` | 500 |
+
+Unlike A/B, C's `budget` **includes all initial evaluations**. Fixed mode
+starts with 5 points in 2D or 12 in 6D. It uses angles
+$\theta\in\{10,30,45,60,80\}$ degrees with
+$\lambda=(\cos\theta,\sin\theta)$ for both scalarization families.
+
+Pareto Algorithm 1 starts with 5 points. Algorithm 2 divides the same global
+budget across 10 independent subruns, each starting with 2 points. RIGHT and
+WRONG Algorithm 2 share the subrun preferences and initial observations.
+Stored anytime curves interleave subruns in round-robin budget order,
+including initialization; this is not physical chronology between subruns.
+
+Optimization preferences are uniform on the positive unit sphere. A separate
+RNG stream draws 2,048 evaluation preferences per seed, shared across methods.
+Standard schedules are logarithmic beta starting at 8 or constant beta 8.
+Known per-objective noise is `noise.std: 1.0e-6`; fixed noise is the default,
+with model standard deviation at least $10^{-6}$. WRONG reuses that model
+noise after scalarization. C's `benchmark.normalization: fixed` does not
+apply additional objective rescaling.
+
+For fixed preference, $v_t=\rho_\lambda(F(x_t))$ is evaluated noiselessly:
+
+$$
+R_n^{\mathrm{simple}}=\rho_\lambda^\star-\max_{t\leq n}v_t,
+\qquad
+R_n^{\mathrm{cumulative}}=
+\sum_{t=1}^{n}\left(\rho_\lambda^\star-v_t\right).
+$$
+
+Processing recomputes the reference optimum on a dense analytic front.
+Pareto evaluation includes exact 2D hypervolume regret, empirical Bayes regret
+over independent preferences, dominance distances, dominated-query fraction,
+and IGD. The reference point and normalization scales are fixed across methods.
+HV regret measures the accumulated set; cumulative dominance regret measures
+the quality of individual queries. IGD measures front coverage and is not
+universally monotone when dominated archive points are removed.
+
+See [Experiment C's protocol](experiments/exp_c_multiobjective/README.md) for
+pairing checks, reference grids, tolerances, and figure selection.
+
+## 7. Lengthscale and RKHS ablations
+
+Experiment A's [ablation guide](experiments/exp_a_target_matching/ABLATIONS.md)
+describes four pilot arms crossing **Matérn 5/2 vs Matérn 1/2** with
+**MLL-optimized vs fixed lengthscales**, comparing RIGHT and WRONG in each arm.
+They use the linear 1D benchmark, fixed domain normalization, and the same
+initial observations. The fixed lengthscale is 0.2 in normalized input units;
+mean and outputscale remain trainable. `paired_method_rng: true` resets
+the method RNG to the seed. This preserves a common RNG initialization, not
+identical adaptive query points.
+
+### Enable diagnostics for a run
+
+The diagnostics themselves support other synthetic A benchmarks and dimensions.
+Add this block to a run's config before processing:
+
+```yaml
+generalization:
+  enabled: true
+  n_test: 2048
+  seed: 123
+```
+
+The default grid is `linspace` in 1D and `sobol` in higher dimensions.
+An explicit `grid: linspace` requires 1D. The same deterministic held-out
+grid is shared across methods and snapshots. Native-function RMSE and latent
+posterior variance have different output units for RIGHT and WRONG and should
+not be ranked directly across those methods.
+
+### Effective RKHS norm
+
+For a saved GP, let $z$ be its training targets in internal model coordinates,
+$m$ its fitted prior mean, $K$ its fitted training covariance including
+outputscale, and $D$ its actual likelihood noise diagonal:
+
+$$
+\alpha=(K+D)^{-1}\bigl(z-m(X)\bigr),
+\qquad
+B_{\mathrm{eff}}^2=\alpha^\top K\alpha.
+$$
+
+The implementation uses a linear solve. This is the norm of the **centered
+posterior mean** in the fitted kernel, excluding the prior mean. It is not an
+imposed norm budget or a norm of the unknown true objective.
+
+For output standardization $y=a+sz$ and fitted kernel
+$K=\sigma_{\mathrm{out}}^2K_\ell$, the centered raw-output mean has norm
+
+$$
+B_{\mathrm{unit}}=s\,\sigma_{\mathrm{out}}\,B_{\mathrm{eff}}
+$$
+
+in the unit-outputscale kernel $k_\ell$. This removes output-amplitude
+conventions. It provides a common reference only when kernel family,
+lengthscale, and input coordinates agree; it does not make norms across
+different Matérn families or MLL-adapted lengthscales directly comparable.
+
+### Common target-distance error
+
+Both methods are evaluated against the same noiseless function:
+
+$$
+\begin{aligned}
+g(x)&=\lvert f_{\mathrm{noiseless}}(x)-T\rvert,\\
+\widehat g_R(x)&=\lvert\mu_f(x)-T\rvert,
+&\widehat g_W(x)&=\mu_g(x),\\
+\mathrm{RMSE}_g&=
+\sqrt{\frac{1}{M}\sum_{i=1}^{M}
+\left(\widehat g(x_i)-g(x_i)\right)^2}.
+\end{aligned}
+$$
+
+RIGHT uses a plug-in mean prediction, not the posterior expectation of an
+absolute value. WRONG predictions are not clipped. Near-target RMSE restricts
+the **same grid** to points satisfying $g(x)\leq\varepsilon$.
+`generalization.near_target_epsilon` overrides the top-level
+`near_target_epsilon`; the threshold and selected point count are saved.
+Without a threshold or with an empty subset, the local error is unavailable.
+
+### Generate individual-run and cross-run figures
+
+```bash
 python -m experiments.exp_a_target_matching.process --run-dir "$RUN_DIR"
 python -m experiments.exp_a_target_matching.analyze --run-dir "$RUN_DIR"
 python -m experiments.exp_a_target_matching.plot --run-dir "$RUN_DIR"
 
-# Alternative raw generation: seed-parallel CPU execution of the driver's CONFIGS.
-python -m scripts.EXPA.run_parallel_seeds --max-workers 8
+# Only the saved RKHS panels; preserves other figures and avoids the
+# initial-design GP fits used by ordinary posterior plots.
+python -m experiments.exp_a_target_matching.plot --run-dir "$RUN_DIR" --rkhs-only
 ```
 
-Processing supports repeatable `--seed 1 --seed 2` and `--benchmark branin_2d`
-filters, plus `--device`. Analysis/plotting accept `--benchmark`; analysis accepts
-`--statistic`, `--n-bootstrap`, `--confidence`, `--convergence-band-type`,
-`--calibration-band-type`, and `--residual-band-type` (`pointwise`, `uniform`, `both`).
-Paired Wilcoxon tests are primary; Mann–Whitney and effect sizes are secondary.
-Parallel/batch variants generate raw data only (see below); A has no dedicated SLURM script.
+Normal `plot.py` adds these files to the other run figures when the
+aggregated diagnostics are available:
 
-## Experiment B — Prior-Guided BO
-
-### Principle
-
-Keep the objective on its natural output scale, oriented to maximization by a
-sign flip where needed. A Gaussian spatial preference
-$\pi(x)=\exp[-\tfrac12\sum_j((x_j-c_j)/\ell_j)^2]$ is evaluated in native input
-coordinates. All methods train on the same kind of raw noisy objective values;
-none trains on residuals.
-
-| Method | Location of the preference |
+| Figure basename, PNG and PDF | Content |
 | --- | --- |
-| `vanilla_ucb` | Baseline: $\mu+\sqrt{\beta_t}\sigma$ |
-| `alpha_pi_ucb` (RIGHT) | Acquisition: $\mu+[1+\frac{\alpha}{1-\alpha}\pi(x)]\sqrt{\beta_t}\sigma$, $0\le\alpha<1$ |
-| `lambda_pi_fixed_ucb`, `lambda_pi_adaptive_ucb` (WRONG) | GP mean $m(x)=\lambda f_{\rm prior}(x)$; ordinary UCB; fixed or MLL-learned $\lambda$ |
-| `lambda_pi_fixed_standardized_ucb`, `lambda_pi_adaptive_standardized_ucb` | Same prior-in-mean comparison with standardized observations and z-scored $\pi$ |
+| `05_gp_generalization` | Lengthscales, native RMSE, mean latent variance |
+| `05_gp_rkhs_complexity` | Lengthscale, fitted/unit-outputscale norms, common global/near-target RMSE |
 
-The raw prior mean is $f_{\rm prior}=f_{\rm lower}+(f_{\rm upper}-f_{\rm lower})\pi$,
-using the benchmark's oriented output range, distinct from RIGHT's dimensionless weight.
+The RKHS figure currently displays the first lengthscale component; ordinary
+generalization plots include all saved components. Snapshot diagnostics
+describe models **before** the corresponding query.
 
-### Code organization and workflow
-
-| Program | Inputs and main dependencies | Outputs |
-| --- | --- | --- |
-| `run.py` | YAML; `benchmarks/oriented.py`, `common/priors.py`, `acquisitions/prior_guided.py` | Paired raw seed JSON with shared initial data, GP snapshots, preference values and learned $\lambda$ |
-| `process.py` | Saved config/raw JSON; prior-aware GP reconstruction, shared metrics/diagnostics | Per-seed regret, convergence, global/prior-region calibration; no GP refitting |
-| `analyze.py` | Processed seeds and config; shared statistics | Aggregate summaries/curves and comparisons against the configured baseline (`vanilla_ucb` by default) |
-| `plot.py` | Saved config, processed/aggregate data, raw trajectories/snapshots, benchmark and prior | PNG/PDF performance, calibration and prior diagnostics in `figures/<benchmark>/` |
-
-### Experimental protocol
-
-Good/bad priors cover Forrester and double Gaussian well (1D), Branin (2D), and
-Hartmann (3D/6D). Base scientific configs use seeds 1–50 and `noise_std: 0.0`.
-Initial/BO counts are 1/50 for 1D, 4/50 for Branin, 6/60 for Hartmann-3, and 12/80
-for Hartmann-6. `budget` excludes the initial design, shared within each seed.
-
-Base configs use $\beta=8$, usually $\alpha=0.5$ (double well: 0.25),
-`lambda_init: 1.0`, and typically 20 restarts / 1024 raw samples.
-`ADAPTATIVE_LOG_BETA/` and `ADAPTATIVE_BETA_MATERN/` change the schedule;
-`TEST_ALPHA/`, `TEST_PRIOR_CENTER/`, and `TEST_PRIOR_LENGTHSCALE/` vary preferences.
-The YAML `methods` list determines which of the six supported methods run.
-
-The default kernel is Matérn 5/2. `model.use_fixed_noise: true` fixes the top-level
-`noise_std` on the oriented objective scale; setting it to `false` infers noise.
-`model.normalize_input` defaults to true and uses fixed domain bounds.
-Standard GP methods honor `model.standardize_output` (default true). Raw
-`lambda_pi_*_ucb` methods force output standardization **off**; their
-`*_standardized_ucb` counterparts force it **on** and z-score $\pi$ over current
-training inputs, with a deterministic Sobol fallback when its spread degenerates.
-Orientation never rescales the objective to $[0,1]$.
-
-Evaluation uses noiseless oriented simple regret $f^*-\max_{s\le n}f(x_s)$,
-cumulative instantaneous regret, AUC, and hitting time. Calibration is on the
-objective for every method, globally and on the masked test-grid region
-$\{x:\pi(x)\ge\texttt{prior_region_threshold}\}$. NLPD, coverage, PIT, residuals,
-bound violations and optional joint diagnostics replay pre-query snapshots as in A.
-
-### Commands and reproducibility
+For comparisons across separately executed pilot configs:
 
 ```bash
-# Small local workflow: Forrester, seeds 0 and 1, 3 initial + 4 BO evaluations.
-python -m experiments.exp_b_prior_guided.run \
-  --config experiments/exp_b_prior_guided/configs/smoke_forrester.yaml --device cpu
-RUN_DIR='<RUN_DIR>'  # results/exp_b_prior_guided/runs/<generated_run_id>
+python -m experiments.exp_a_target_matching.compare_ablations \
+  --run-dir "$RUN_MATERN52_MLL" --run-dir "$RUN_MATERN52_FIXED" \
+  --run-dir "$RUN_MATERN12_MLL" --run-dir "$RUN_MATERN12_FIXED" \
+  --output-dir results/exp_a_target_matching/ablation_comparison
+```
+
+Use configs `linear_1d_matern52_mll.yaml`,
+`linear_1d_matern52_fixed.yaml`, `linear_1d_matern12_mll.yaml`, and
+`linear_1d_matern12_fixed.yaml` under `configs/ablations/`.
+The comparison validates matching settings, seed IDs, and initial observations,
+and writes `lengthscale_ablations` and `rkhs_complexity_ablations` in
+PNG/PDF. This cross-run script currently supports **1D only**.
+
+Existing runs with sufficient GP snapshots and training data can be reprocessed
+without rerunning BO. Enable generalization in their saved `config.json`,
+retain a record of this diagnostic-only edit, and process **all** seeds before
+aggregating. The processors reconstruct saved GPs without refitting.
+
+### Interpretation
+
+A fixed-RKHS approximation barrier concerns a fixed kernel space and a
+norm-constrained approximation family:
+
+$$
+\left\{h\in\mathcal H_k:\ \lVert h\rVert_{\mathcal H_k}\leq B\right\}.
+$$
+
+MLL changes lengthscale and therefore kernel geometry. A shorter lengthscale
+does **not** necessarily imply a larger RKHS norm. Even fixed-lengthscale arms
+still learn amplitude and mean. These plots investigate associations between
+complexity and approximation error along adaptive trajectories; they do not
+establish causality, an asymptotic barrier, or theoretical rates. Small pilots
+are descriptive checks, not robust inferential evidence.
+
+## 8. Results and visualization
+
+### Processing pipeline
+
+For A/B, use the experiment's `process`, `analyze`, then `plot`
+module. For example:
+
+```bash
+RUN_DIR='results/exp_b_prior_guided/runs/<generated_run_id>'
 python -m experiments.exp_b_prior_guided.process --run-dir "$RUN_DIR" --verify
 python -m experiments.exp_b_prior_guided.analyze --run-dir "$RUN_DIR"
 python -m experiments.exp_b_prior_guided.plot --run-dir "$RUN_DIR"
-
-# Alternative raw generation across seeds/configs selected in the driver.
-python -m scripts.EXPB.run_parallel_seeds --max-workers 8
 ```
 
-For scientific runs, choose a good/bad-prior YAML. Processing supports A's filters;
-`--verify` checks stored values/regret against analytic re-evaluation at saved inputs.
-Analysis shares A's bootstrap/band options and adds `--baseline METHOD`: comparisons
-use paired Wilcoxon plus secondary unpaired tests/effect sizes. B has no dedicated SLURM script.
-
-## Experiment C — Multi-Objective BO
-
-### Principle
-
-ZDT objectives are minimized in their original convention; optimization uses
-$F=-f_{\rm raw}$ for maximization. RIGHT fits one independent GP per objective
-(`ModelListGP`) and scalarizes the objective-wise UCB vector. WRONG fits a scalar
-GP on $g_\lambda=\rho_\lambda(\texttt{model_y})$ and maximizes ordinary scalar UCB:
-
-$$
-a_R(x;\lambda)=\rho_\lambda\!\left((\mu_j(x)+\sqrt{\beta_t}\sigma_j(x))_{j=1}^m\right),
-\qquad a_W(x)=\mu_g(x)+\sqrt{\beta_t}\sigma_g(x).
-$$
-
-Scalarizations are weighted sum $\rho_\lambda(y)=\sum_j\lambda_j y_j$ and radial
-hypervolume $\rho_\lambda(y)=[\min_j \max(0,y_j-z_j)/\lambda_j]^m$.
-**Fixed scalarization** compares `right`/`wrong` at fixed preferences.
-**Pareto front** compares `right_algorithm_1` (one shared posterior across online
-preferences) with `right_algorithm_2`/`wrong_algorithm_2` (independent subruns,
-each with a fixed preference). Algorithm 2's RIGHT/WRONG subruns share preferences
-and initial observations; observations are not pooled between subruns.
-
-### Code organization and workflow
-
-| Program/module | Inputs and main dependencies | Outputs |
-| --- | --- | --- |
-| `run.py` | YAML validated by `config.py`; ZDT benchmarks; `methods.py` GP/acquisition logic; shared scalarization/preference sampling | Raw paired seed JSON containing fixed cases or global Pareto trajectories, preferences, budgets and pairing hashes |
-| `process.py` | Raw JSON and metadata; analytic benchmarks, hypervolume/regret/Pareto diagnostics | Verified per-seed metrics; re-evaluates saved inputs, never rebuilds GPs or reruns BO |
-| `analyze.py` | Processed seeds for aggregation; raw data for objective/decision-space figures; `plotting.py`, `trajectory_figures.py`, `final_comparisons.py` | Aggregate JSON, paired bootstrap comparisons, PNG/PDF figures directly under `figures/` |
-
-There is no separate C `plot.py`: analysis generates the figures. Older processed
-Pareto files need reprocessing to supply the current dominance/IGD diagnostics.
-
-### Experimental protocol
-
-ZDT1 (convex front) and ZDT2 (concave front with unsupported interior points) have
-two objectives, with configured input dimensions 2 or 6 on $[0,1]^d$.
-`model_y = -raw_y + noise`; `benchmark.normalization: fixed` is informational:
-there is no additional fixed output rescaling. GP input normalization and output
-standardization default to true and can be disabled independently under `model`.
-The kernel defaults to Matérn 5/2. Standard configs use seeds 1–50,
-20 restarts / 1024 raw samples, and either $\beta_t=8+\log(t+1)$ or constant 8.
-
-| Mode | Budget/design and preferences |
-| --- | --- |
-| Fixed | Total `budget` 50 in 2D (5 initial), 200 in 6D (12 initial), **per method and scalarization/angle case**; linear and hypervolume; angles 10°, 30°, 45°, 60°, 80° with $\lambda=(\cos\theta,\sin\theta)$ |
-| Pareto | Total `budget` 500 **per method including every initial point**; Algorithm 1 starts with 5 points; Algorithm 2 splits the budget evenly over 10 subruns with 2 initial points each; stored global order is round-robin, including initialization |
-
-Pareto preferences are uniform on the positive unit sphere. Algorithm 1 draws
-one per BO step; Algorithm 2 draws one per subrun. A separate RNG stream supplies
-2048 evaluation preferences per seed, shared across methods and independent of
-optimization preferences. Default subrun designs differ across subruns; RIGHT
-and WRONG Algorithm 2 reuse the same subrun designs/initial observations.
-
-**Noise policy:** `noise.std` is the per-objective Gaussian **standard deviation**
-on the oriented scale (currently `1.0e-6` in the supplied configs).
-`model.use_fixed_noise` defaults to **true**, as implemented in
-`methods.py::make_gp_builder`. It passes `max(noise.std, 1e-6)` to
-`GPModelConfig.noise_std`, so `common/models.py` constructs `FixedNoiseGP` with
-`train_Yvar = max(noise.std, 1e-6)²`. This is the chosen policy for known synthetic
-noise; explicit `false` selects noise inference with `SingleTaskGP`.
-GPyTorch may clamp this tiny variance further. WRONG's scalar GP reuses the same
-variance after scalarization rather than propagating noise through $\rho_\lambda$;
-for nonlinear scalarization this is an approximation to transformed noise.
-
-Fixed-mode metrics are noiseless scalarized simple/instantaneous/cumulative
-regret. Processing recomputes the scalar optimum on a 1,000,000-point analytic
-front. Pareto metrics include exact 2D hypervolume, hypervolume regret, empirical
-Bayes regret, dominance diagnostics and IGD; front-based reference values use
-the configured resolution (normally 10,000). The fixed oriented hypervolume
-reference is $z=(-1.1,-1.1)$ by default. C's trajectory bands show median and
-25–75% **inter-seed percentiles**, with dashed means; final comparisons separately
-use 95% paired seed-block bootstrap CIs (5,000 replicates). Fixed-mode summaries
-also report paired Wilcoxon tests. Linear scalarization's inability to recover
-ZDT2's interior front is a scalarization limitation shared by both architectures.
-
-### Commands and reproducibility
+C generates figures in `analyze.py`; **there is no separate C `plot.py`**:
 
 ```bash
-# Small fixed-preference workflow (6 total evaluations per method/case, 2 seeds).
-python -m experiments.exp_c_multiobjective.run \
-  --config experiments/exp_c_multiobjective/configs/fixed_scalarization/LOG_BETA/smoke_zdt1_d2.yaml \
-  --tag smoke_fixed_zdt1_d2 --device cpu
-RUN_DIR='<RUN_DIR>'  # results/exp_c_multiobjective/runs/<generated_run_id>
+RUN_DIR='results/exp_c_multiobjective/runs/<generated_run_id>'
 python -m experiments.exp_c_multiobjective.process --run-dir "$RUN_DIR"
-python -m experiments.exp_c_multiobjective.analyze --run-dir "$RUN_DIR"  # includes figures
+python -m experiments.exp_c_multiobjective.analyze --run-dir "$RUN_DIR"
 
-# Alternative raw generation: small Pareto workflow; then process/analyze its own RUN_DIR.
-python -m experiments.exp_c_multiobjective.run \
-  --config experiments/exp_c_multiobjective/configs/pareto_front/smoke_zdt1_d2.yaml \
-  --tag smoke_pareto_zdt1_d2 --device cpu
-
-# Full selected configuration suite, parallel across seeds (raw generation only).
-python -m scripts.EXPC.run_parallel_seeds --max-workers 8 --schedule logbeta
-
-# Same seed-parallel driver under SLURM; uses allocated CPUs as worker count.
-mkdir -p logsC_cpu_runs
-sbatch scripts/EXPC/runC_parallel_seeds.sbatch --schedule logbeta
+# Reorganize already generated C figures and refresh selected panels.
+python -m experiments.exp_c_multiobjective.analyze \
+  --run-dir "$RUN_DIR" --refresh-selection
 ```
 
-`--schedule` accepts `all` (default), `logbeta`, or `beta8`. SLURM defaults to
-partition `SallesInfo`, 26 CPUs, 48 GB, and two days; adapt with `sbatch` options.
-It generates raw data only. C processing accepts only `--run-dir`, without seed/worker filters.
-Analysis accepts repeatable `--run-dir` for Pareto subrun-count ablation overlays;
-outputs go to the first run directory, whose processed seeds supply its summaries.
+A/B processing supports repeatable `--seed` and `--benchmark` filters.
+Their analysis supports statistic, bootstrap count, confidence level, and
+pointwise/uniform band options; B also accepts `--baseline`.
+C accepts repeatable `--run-dir` for an Algorithm-2 subrun-count overlay;
+its main summaries use the first run. Use compatible runs differing in subrun
+count, not unrelated benchmark configurations.
 
-## Execution variants and outputs
-
-Seed-parallel drivers reuse the sequential per-seed routines, raw schema and pairing.
-Protocol/budget are equivalent; bitwise identity across hardware, dependency versions
-or BLAS thread settings is not guaranteed. Drivers use CPU with math-library threads
-defaulting to one per worker.
-
-Config selection is embedded in `CONFIGS`/`CONFIG_DIR`, with **no `--config` option**:
-A selects Hartmann-6 from `ADAPTATIVE_MATERN_BETA/`; B selects eight configs from
-`ADAPTATIVE_LOG_BETA/`; C selects 16 fixed/Pareto configs before schedule filtering.
-Each creates a fresh run per tag.
-All accept `--results-root` and `--reuse-existing`; the latter selects the newest
-matching run. C skips existing seed files; A/B currently rerun and overwrite
-them, despite resume wording in their docstrings.
-
-`runA_all_cpu.sh`/`runB_all_cpu.sh` launch their embedded config lists concurrently,
-with sequential seeds inside each process. `runA_parallel_seeds.sh`,
-`runB_parallel_seeds.sh`, and `runC_parallel_seeds.sh` wrap the Python seed drivers
-(optional positional worker count). These are generation variants, not later
-pipeline stages. `processA_last_runs.sh`/`processB_last_runs.sh` perform processing
-and aggregation; `plotA_last_runs.sh`/`plotB_last_runs.sh` plot. For C,
-`processC_last_runs.sh` processes and `plotC_last_runs.sh` analyzes/plots.
-Explicit run-directory commands above avoid these wrappers' tag-based selection.
+### Output layout
 
 ```text
-results/<experiment>/runs/<timestamp>_<tag>/
-  config.json, metadata.json                Parsed config; command, Git state, environment
-  raw/<benchmark>/seed_NNN.json             All methods paired within one seed file
-  processed/per_seed/<benchmark>/
-    seed_NNN_processed.json                Derived per-seed metrics (and A/B calibration)
-  processed/aggregate/<benchmark>/          A/B cross-seed summaries and bootstrap curves
-  figures/<benchmark>/                     A/B PNG/PDF figures
-  figures/                                 C PNG/PDF figures
-  logs/                                    Stage logs; parallel launcher logs may be external
+results/<experiment>/runs/<UTC_timestamp>_<tag>/
+  config.json
+  metadata.json                              command, platform, Git state, seeds, ...
+  raw/<benchmark>/seed_NNN.json               all compared methods for one seed
+  processed/per_seed/<benchmark>/seed_NNN_processed.json
+  processed/aggregate/<benchmark>/           A/B summaries and bootstrap curves
+  processed/aggregate_summary.json           C summary
+  processed/paired_bootstrap_comparisons.json C paired statistics
+  figures/<benchmark>/                       A/B PNG/PDF
+  figures/                                   C main PNG/PDF
+    supplementary/                           C secondary views
+    archive/                                 C legacy replaced/mixed-metric figures
+    figure_selection.json                    C file-move manifest
+  logs/                                      stage logs
 ```
 
-A/B aggregate files are `final_performance.json`, `convergence_curves.json`,
-`calibration_summary.json`, `calibration_curves.json`, and `statistical_tests.json`
-(curve files depend on `aggregate` settings). C instead writes
-`processed/aggregate_summary.json` and `processed/paired_bootstrap_comparisons.json`.
-Keep raw data, saved config, code and dependency versions for reproducibility.
-A/B snapshots require a compatible GP stack. Aggregation uses processed seeds;
-plotting can also read raw data. Postprocessing does not rerun BO.
+A/B aggregate files include `final_performance.json`,
+`convergence_curves.json`, `calibration_summary.json`,
+`calibration_curves.json`, and `statistical_tests.json`.
+A additionally writes `generalization_curves.json` when enabled. Curve
+availability depends on the saved configuration.
 
-## Configuration caveats
+### Figures and uncertainty
 
-- A's `smoke_1d.yaml` currently runs **Branin-2D**, 20 seeds and 50 BO steps with
-  20 initial points; it is not a tiny 1D smoke test despite its name/comments.
-- `scripts/EXPC/runC_all_cpu.sh` references missing
-  `fixed_scalarization/zdt*.yaml` paths. Use the documented Python driver or the
-  actual `LOG_BETA/` and `beta=8/` configs. C's latest-run wrappers do not match
-  the Python driver's `_logbeta`/`_beta8` tag suffixes; use explicit `--run-dir`.
+A's standard figures cover benchmark geometry, posterior/acquisition
+snapshots, query trajectories, target-distance convergence, final
+distributions, paired comparisons, calibration, and GP hyperparameters.
+B adds prior geometry, learned prior coefficients, and query/prior diagnostics.
+Geometry and posterior views depend on dimension and available snapshots.
+Calibration includes NLPD, coverage, PIT, standardized residuals, confidence
+bound violations, and optional joint diagnostics.
+
+For held-out values of a specified modeled quantity, marginal Gaussian NLPD is
+
+$$
+\mathrm{NLPD}=\frac{1}{M}\sum_{i=1}^{M}
+\left[\frac{(q_i-\mu_i)^2}{2\sigma_i^2}
++\frac{1}{2}\log(2\pi\sigma_i^2)\right].
+$$
+
+Here $q_i$ is the evaluation truth in the prediction's units; its definition
+must match the diagnostic (raw objective, transformed distance, or observation).
+Coverage is the fraction inside the specified predictive intervals; PIT values
+are predictive CDF values at the evaluation truth. Joint NLPD additionally uses
+posterior correlations. Latent and noisy-observation diagnostics are distinct.
+
+C's main selection retains fixed-preference query maps at **every angle**,
+simple/cumulative regret panels and aggregates, all-seed preference maps,
+aggregate distributions, and separate paired-bootstrap comparisons.
+Pareto views retain query maps, final fronts, HV regret, cumulative dominance
+regret, dominated-query fraction, IGD, and selected final/paired summaries.
+Secondary figures remain in `supplementary/`; legacy mixed-metric plots and
+old best-so-far panels are archived without deletion.
+
+A/B primarily use paired Wilcoxon comparisons, with additional effect sizes
+and unpaired tests. C reports mean paired RIGHT-minus-WRONG differences with
+95% percentile bootstrap intervals from 5,000 seed-block replications.
+Fixed-preference aggregates average angles within each seed before resampling.
+Negative regret differences favor RIGHT. Algorithm 1 vs WRONG Algorithm 2 is
+paired by seed but does not share an initial design; RIGHT vs WRONG Algorithm 2
+has the stricter shared-subrun pairing.
+
+C's trajectory bands are inter-seed IQRs, not confidence intervals; its fixed
+aggregate band is the min–max range of per-angle medians. A's generalization
+bands are pointwise bootstrap intervals for seed means. Always distinguish
+trajectory variability from uncertainty on a mean.
+
+## 9. Limitations and reproducibility notes
+
+- Save raw observations, config snapshots, code revision, and dependency versions.
+  A/B GP snapshots require a compatible GP stack. A Git hash does not capture
+  uncommitted edits; metadata also records the dirty state.
+- Current experiments are synthetic. Real-data metrics must not assume
+  `f_noiseless`, exact optima, true fronts, or known objective ranges.
+- Data-dependent normalization, output standardization, mean fitting, and noise
+  floors affect GP interpretation. Native errors and fitted-kernel norms across
+  different modeled functions or kernels are not automatically comparable.
+- Most model diagnostics reconstruct pre-query snapshots; they are not a
+  separately fitted posterior after the final evaluation. Ordinary A/B plotting
+  may fit an initial-design GP for visualization; A's `--rkhs-only` path does not.
+- A's historical `configs/smoke_1d.yaml` actually specifies Branin-2D,
+  20 seeds, 20 initial points, and 50 BO steps. Use the Quick Start config instead.
+- The legacy `scripts/EXPC/runC_all_cpu.sh` references missing fixed-mode
+  config paths. Use C's Python launcher. The latest-run shell wrappers may not
+  match schedule-suffixed C tags; explicit `--run-dir` is more reliable.
+- A/B ordinary plotting clears existing PNG/PDF files in its benchmark figure
+  directory before exporting the regenerated set. Keep manually curated files
+  elsewhere. A's `--rkhs-only` preserves other files.
+- Incomplete runs summarize available seeds only. A single seed cannot support
+  an identifiable paired bootstrap interval; pilot uncertainty is limited.
+- CPU/GPU and numerical library differences can change optimization paths.
+  The launchers preserve RNG logic; they do not promise cross-platform bitwise
+  reproduction.
+
+Lightweight verification commands, without scientific sweeps:
+
+```bash
+python -m compileall common acquisitions experiments scripts
+python -m scripts.EXPA.run_parallel_seeds --help
+python -m scripts.EXPB.run_parallel_seeds --help
+python -m scripts.EXPC.run_parallel_seeds --help
+pytest
+```
+
+The `scripts/smoke_test_exp_*_workflow.py` utilities execute small BO
+workflows and create results; they are separate from help/compilation checks.

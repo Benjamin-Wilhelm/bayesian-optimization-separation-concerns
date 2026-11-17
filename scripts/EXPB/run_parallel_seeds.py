@@ -1,27 +1,20 @@
 #!/usr/bin/env python
-"""Seed-parallel driver for the Experiment B (prior-guided) configs.
+"""CPU seed-parallel driver for Experiment B.
 
-Unlike ``runB_all_cpu.sh`` (one process per config, seeds run sequentially),
-this schedules every ``(config, seed)`` pair as an independent job across a
-process pool so all idle cores are used.
+Use --config PATH to select one YAML. Without it, use the existing default
+batch. Each (config, seed) job calls the sequential
+runner's per-seed routine, preserving its pairing and RNG logic. Numerical
+identity across hardware, dependencies, or thread settings is not guaranteed.
 
-Every seed is self-seeded (``_run_one_seed`` calls ``torch.manual_seed(seed)``
-and re-derives the Sobol initial design from ``seed``), so scheduling the seeds
-across a pool yields byte-identical results to the sequential runner while
-saturating the cores.
-
-Each worker is pinned to a single BLAS/OMP thread; parallelism comes from
-running many one-seed jobs at once, not from threading inside one seed.
-
-Each launch creates a FRESH timestamped run dir per tag and keeps it, so
-re-launching never overwrites a previous run (the date makes every launch
-unique).  Pass ``--reuse-existing`` to instead fill the newest existing dir
-for a tag, to resume a partial run.  Seed files are one-per-file, so
-concurrent writes never collide.
+Ordinary launches use timestamped run directories. Avoid concurrent launches
+with the same tag: timestamps have one-second resolution.
+With --reuse-existing, select the newest matching run and recompute all
+selected seeds, overwriting existing seed JSON. Config and metadata are saved
+again; this preserves the launcher's historical behavior.
 
 Usage::
 
-    .venv/bin/python -m scripts.EXPB.run_parallel_seeds --max-workers 26
+    python -m scripts.EXPB.run_parallel_seeds --config PATH --max-workers 8
 """
 from __future__ import annotations
 
@@ -128,9 +121,8 @@ def main(argv=None) -> int:
                     default=max(1, (os.cpu_count() or 4) - 2))
     ap.add_argument("--results-root", type=Path, default=_ROOT / "results")
     ap.add_argument("--reuse-existing", action="store_true",
-                    help="Resume: fill the newest existing run dir for each tag "
-                         "instead of creating a fresh dated dir. Off by default "
-                         "so re-launching never overwrites a previous run.")
+                    help="Reuse the newest matching run and recompute all selected seeds, "
+                         "overwriting existing seed JSON. Off by default.")
     args = ap.parse_args(argv)
 
     torch.set_num_threads(1)
