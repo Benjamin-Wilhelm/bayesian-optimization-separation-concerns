@@ -650,7 +650,7 @@ A fixed-RKHS approximation barrier concerns a fixed kernel space and a
 norm-constrained approximation family:
 
 $$
-\left\{h\in\mathcal H_k:\ \lVert h\rVert_{\mathcal H_k}\leq B\right\}.
+\left\lbrace h \in \mathcal{H}_k \mid \lVert h \rVert_{\mathcal{H}_k} \leq B \right\rbrace.
 $$
 
 MLL changes lengthscale and therefore kernel geometry. A shorter lengthscale
