@@ -108,7 +108,7 @@ $\lambda$ fixed within that GP. Their maximized acquisitions are
 $$
 \begin{aligned}
 A_{j,t}(x)&=\mu_{j,t}(x)+\sqrt{\beta_t}\,\sigma_{j,t}(x),\\
-a_R(x;\lambda)&=\rho_\lambda\!\left(
+a_R(x;\lambda)&=\rho_\lambda\\left(
  A_{1,t}(x),\ldots,A_{m,t}(x)\right),\\
 a_W(x;\lambda)&=\mu_{g_\lambda,t}(x)
  +\sqrt{\beta_t}\,\sigma_{g_\lambda,t}(x).
